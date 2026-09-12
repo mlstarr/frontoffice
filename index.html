@@ -36,6 +36,10 @@ header{
 }
 header .crest{width:34px;height:34px;border-radius:2px;flex:0 0 auto;display:grid;place-items:center;
   font-family:var(--serif);font-weight:700;font-size:14px;color:#fff}
+.backbtn{width:34px;height:34px;flex:0 0 34px;border-radius:5px;border:1px solid rgba(255,255,255,.22);
+  background:rgba(255,255,255,.06);color:#fff;font-size:22px;line-height:1;cursor:pointer;
+  display:grid;place-items:center;padding:0 0 3px}
+.backbtn:active{background:rgba(255,255,255,.16)}
 header .who{flex:1;min-width:0}
 header .who b{display:block;font-family:var(--serif);font-size:16px;font-weight:600;line-height:1.2;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -152,6 +156,28 @@ nav button[aria-current="page"] .ic{background:var(--team);color:var(--teamink)}
 .attn:last-child{border-bottom:0}
 .panel.hint{border-left:3px solid var(--field)}
 .panel.guide{border-left:3px solid var(--gold)}
+/* ---- depth chart ---- */
+.depthgrp{margin:0 0 14px}
+.depthhead{padding:0 2px 5px;border-bottom:1px solid var(--rule)}
+.depthtable{width:100%;border-collapse:collapse}
+.depthtable td{padding:7px 6px;border-bottom:1px solid var(--rule2);vertical-align:middle}
+.depthtable tr.starter{background:var(--paper2)}
+.depthtable tr.starter td:first-child{color:var(--team);font-weight:700}
+.ovrcell{font-family:var(--mono);font-size:17px;font-weight:600;width:44px;text-align:right}
+.wrap{white-space:normal;overflow:visible}
+
+/* ---- a player's numbers ---- */
+.statwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table.stat{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+table.stat th{font-family:var(--sans);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink3);font-weight:600;padding:5px 7px;border-bottom:1px solid var(--rule);
+  text-align:right;background:var(--paper2)}
+table.stat th:first-child{text-align:left}
+table.stat td{padding:7px;border-bottom:1px solid var(--rule2);text-align:right;
+  font-family:var(--mono);font-size:14px}
+table.stat td:first-child{text-align:left;font-family:var(--sans);font-size:12px;color:var(--ink2)}
+table.stat tr.tot td{font-weight:700;border-top:1px solid var(--rule);background:var(--paper2)}
+table.stat .big{font-size:16px;font-weight:600}
 
 /* ---- the front door ---- */
 body.at-menu nav{display:none}
@@ -356,29 +382,109 @@ const LAST = ("Whitaker Barlow Ferris Hollis Kincaid Ramsey Vaughn Nash Steele C
 const CONFNAME=["AFC","NFC"], DIVNAME=["East","North","South","West"];
 
 /* ---------- colleges: [name, tier, region] tier1=blue blood ... tier4=small ---------- */
+/* Real programmes, weighted by how often they actually put men in the draft.
+   Notre Dame, USC and Ohio State are the only three past 500 all-time picks;
+   Ohio State has produced the most since 2000. Weight drives how often a
+   prospect comes from there. Tier drives how much attention he gets. */
 const SCHOOLS = [
- ["Alabaster State",1,"South"],["Ohio Central",1,"Midwest"],["Texas Palo Duro",1,"South"],
- ["Southern California Tech",1,"West"],["Georgia Piedmont",1,"South"],["Michigan Northern",1,"Midwest"],
- ["Oklahoma Plains",1,"South"],["Notre Dame Valley",1,"Midwest"],["Clemson Hill",1,"South"],
- ["LSU Bayou A&M",1,"South"],
- ["Penn Allegheny",2,"East"],["Florida Gulf State",2,"South"],["Oregon Cascade",2,"West"],
- ["Wisconsin Badgerland",2,"Midwest"],["Iowa Prairie",2,"Midwest"],["Tennessee Ridge",2,"South"],
- ["Auburn Chattahoochee",2,"South"],["Miami Bayfront",2,"South"],["Washington Sound",2,"West"],
- ["Utah Wasatch",2,"West"],["North Carolina Sandhills",2,"South"],["Virginia Tidewater",2,"East"],
- ["Baylor Brazos",2,"South"],["Arizona Sonora",2,"West"],["Nebraska Sandhill",2,"Midwest"],
- ["Pitt Monongahela",2,"East"],["Rutgers Raritan",2,"East"],["Purdue Wabash",2,"Midwest"],
- ["Boise Highlands",3,"West"],["Memphis Delta",3,"South"],["Tulane Crescent",3,"South"],
- ["App State Blue Ridge",3,"South"],["Toledo Maumee",3,"Midwest"],["Fresno Central Valley",3,"West"],
- ["Marshall Cabell",3,"East"],["UAB Magic City",3,"South"],["Wyoming Laramie",3,"West"],
- ["Ohio Hocking",3,"Midwest"],["Coastal Carolina Waccamaw",3,"South"],["UTSA Alamo",3,"South"],
- ["Buffalo Niagara",3,"East"],["Nevada Truckee",3,"West"],["Troy Pike",3,"South"],
- ["North Dakota Bison Valley",4,"Midwest"],["Montana Bitterroot",4,"West"],
- ["Jackson Delta A&M",4,"South"],["Grambling Bayou A&M",4,"South"],["Villanova Main Line",4,"East"],
- ["Youngstown Mahoning",4,"Midwest"],["Sam Houston Piney Woods",4,"South"],
- ["Mercer Ocmulgee",4,"South"],["Idaho Palouse",4,"West"],["Delaware Brandywine",4,"East"],
- ["Kutztown Maiden Creek",4,"East"],["Ferris Big Rapids",4,"Midwest"],["Valdosta Withlacoochee",4,"South"],
- ["Colorado Mesa Grand",4,"West"],["Wingate Union",4,"South"],["Northwest Missouri Nodaway",4,"Midwest"]
+ ["Ohio State",1,"Midwest",34],["Alabama",1,"South",32],["Georgia",1,"South",30],
+ ["LSU",1,"South",27],["Michigan",1,"Midwest",26],["Notre Dame",1,"Midwest",25],
+ ["USC",1,"West",24],["Texas",1,"South",24],["Oklahoma",1,"South",22],
+ ["Clemson",1,"South",21],["Florida",1,"South",21],["Penn State",1,"East",20],
+ ["Miami",1,"South",19],["Tennessee",1,"South",17],["Auburn",1,"South",17],
+ ["Texas A&M",1,"South",17],["Oregon",1,"West",16],["Florida State",1,"South",16],
+ ["Washington",2,"West",14],["Wisconsin",2,"Midwest",14],["Iowa",2,"Midwest",14],
+ ["Ole Miss",2,"South",12],["Utah",2,"West",12],["Michigan State",2,"Midwest",11],
+ ["Stanford",2,"West",11],["UCLA",2,"West",11],["Nebraska",2,"Midwest",11],
+ ["South Carolina",2,"South",11],["Kentucky",2,"South",10],["Missouri",2,"Midwest",10],
+ ["Arkansas",2,"South",10],["Oklahoma State",2,"South",10],["TCU",2,"South",10],
+ ["Baylor",2,"South",9],["NC State",2,"South",9],["North Carolina",2,"South",9],
+ ["Pittsburgh",2,"East",9],["Louisville",2,"South",9],["Virginia Tech",2,"East",9],
+ ["West Virginia",2,"East",8],["Mississippi State",2,"South",8],["Purdue",2,"Midwest",8],
+ ["Minnesota",2,"Midwest",8],["Maryland",2,"East",8],["Boston College",2,"East",8],
+ ["Arizona State",2,"West",8],["Arizona",2,"West",7],["Kansas State",2,"Midwest",7],
+ ["Indiana",2,"Midwest",7],["Illinois",2,"Midwest",7],["Rutgers",2,"East",7],
+ ["Duke",3,"South",6],["Wake Forest",3,"South",6],["Syracuse",3,"East",6],
+ ["Cincinnati",3,"Midwest",6],["Houston",3,"South",6],["UCF",3,"South",6],
+ ["Iowa State",3,"Midwest",6],["Colorado",3,"West",6],["Kansas",3,"Midwest",5],
+ ["Vanderbilt",3,"South",5],["Virginia",3,"East",5],["Georgia Tech",3,"South",5],
+ ["Northwestern",3,"Midwest",5],["California",3,"West",5],["Oregon State",3,"West",5],
+ ["Washington State",3,"West",5],["Memphis",3,"South",4],["Tulane",3,"South",4],
+ ["SMU",3,"South",4],["Boise State",3,"West",4],["San Diego State",3,"West",4],
+ ["Fresno State",3,"West",4],["Air Force",3,"West",3],["Navy",3,"East",3],
+ ["Army",3,"East",3],["Appalachian State",3,"South",3],["Coastal Carolina",3,"South",3],
+ ["Liberty",3,"South",3],["Toledo",3,"Midwest",3],["Western Michigan",3,"Midwest",3],
+ ["Nevada",3,"West",3],["UTSA",3,"South",3],["Marshall",3,"East",3],
+ ["North Dakota State",4,"Midwest",4],["South Dakota State",4,"Midwest",3],
+ ["Montana",4,"West",2],["Montana State",4,"West",2],["Jackson State",4,"South",2],
+ ["Southern Illinois",4,"Midwest",2],["Villanova",4,"East",2],["Delaware",4,"East",2],
+ ["Richmond",4,"East",2],["Chattanooga",4,"South",2],["Idaho",4,"West",1],
+ ["Youngstown State",4,"Midwest",1],["Ferris State",4,"Midwest",1],
+ ["Valdosta State",4,"South",1],["Grand Valley State",4,"Midwest",1],
+ ["North Alabama",4,"South",1],["Incarnate Word",4,"South",1]
 ];
+const POSNAME={QB:"Quarterback",RB:"Running back",WR:"Wide receiver",TE:"Tight end",
+  LT:"Left tackle",LG:"Left guard",C:"Center",RG:"Right guard",RT:"Right tackle",
+  EDGE:"Edge rusher",DT:"Defensive tackle",LB:"Linebacker",CB:"Cornerback",
+  S:"Safety",K:"Kicker",P:"Punter"};
+/* Real production is the starting point, not the permanent state. Every league
+   opens with those figures shaken up, and each year drifts from the last, so
+   programmes rise and fall the way they actually do. */
+function initSchoolWeights(){
+  const w={};
+  for(const s of SCHOOLS) w[s[0]]=Math.max(1,Math.round(s[3]*rf(0.62,1.42)*10)/10);
+  S.schoolW=w;
+  S.schoolBag=null;
+}
+function driftSchoolWeights(){
+  if(!S.schoolW){ initSchoolWeights(); return; }
+  const newsLines=[];
+  for(const s of SCHOOLS){
+    const name=s[0], base=s[3];
+    let w=S.schoolW[name]||base;
+    w*=rf(0.90,1.12);                       // the ordinary year-to-year wobble
+    if(chance(0.035)){                      // a hire, a scandal, a run of classes
+      const surge=chance(0.5);
+      w*=surge?rf(1.35,1.85):rf(0.52,0.74);
+      if(base>=8&&Math.abs(Math.log(w/base))>0.5)
+        newsLines.push(`${name} ${surge?"are turning out professionals again — our scouts are spending more time there"
+          :"have stopped producing. Our people are going elsewhere"}.`);
+    }
+    w+= (base-w)*0.06;                      // nobody drifts away from what they are forever
+    S.schoolW[name]=clamp(Math.round(w*10)/10,0.4,base*3+6);
+  }
+  S.schoolBag=null;
+  for(const n of newsLines.slice(0,2)) if(typeof news==="function") news(n,"league");
+}
+function schoolBag(){
+  if(!S.schoolW) initSchoolWeights();
+  if(!S.schoolBag){
+    const bag=[];
+    for(const s of SCHOOLS){
+      const n=Math.max(1,Math.round(S.schoolW[s[0]]||s[3]));
+      for(let i=0;i<n;i++) bag.push(s);
+    }
+    S.schoolBag=bag;
+  }
+  return S.schoolBag;
+}
+/* how a programme is regarded now, not how it was regarded at kickoff */
+function schoolTier(s){
+  if(!S.schoolW) initSchoolWeights();
+  const w=S.schoolW[s[0]]||s[3];
+  const base=s[1];
+  const ratio=w/Math.max(1,s[3]);
+  let t=base;
+  if(ratio>1.55) t=base-1;
+  else if(ratio<0.62) t=base+1;
+  return clamp(t,1,4);
+}
+function pickSchool(){ return pick(schoolBag()); }
+function schoolStanding(n){
+  if(!S.schoolW) initSchoolWeights();
+  return SCHOOLS.slice().sort((a,b)=>(S.schoolW[b[0]]||b[3])-(S.schoolW[a[0]]||a[3])).slice(0,n||10);
+}
+
 const REGIONS = ["East","South","Midwest","West"];
 
 /* ---------- money ---------- */
@@ -624,6 +730,7 @@ function calibrateMoney(){
   }
 }
 function buildLeague(){
+  initSchoolWeights();          // this league's own version of the college map
   S.teams = REAL_TEAMS.map((_,i)=>makeTeam(i));
   const strengths = shuffle(S.teams.map((_,i)=>gauss(0,3.6)));
   S.teams.forEach((t,i)=>{
@@ -1543,6 +1650,13 @@ function offseasonProgress(){
         news(`${p.pos} ${p.f} ${p.l} retires after ${p.career.seasons} `+
           `season${p.career.seasons===1?"":"s"}`,"league",p.id);
     }
+    if(p.stats&&p.stats.gp){
+      p.seasonLog=p.seasonLog||[];
+      p.seasonLog.unshift({year:S.year,
+        team:p.teamId!==null&&S.teams[p.teamId]?S.teams[p.teamId].abbr:"—",
+        s:Object.assign({},p.stats)});
+      if(p.seasonLog.length>14) p.seasonLog.length=14;
+    }
     p.lastStats=p.stats; p.stats={};
   }
   return retirees;
@@ -1604,7 +1718,13 @@ function newDraftPicks(){
 const CLASS_POS = [["QB",16],["RB",22],["WR",40],["TE",18],["LT",12],["LG",12],["C",10],
   ["RG",12],["RT",12],["EDGE",34],["DT",30],["LB",28],["CB",34],["S",22],["K",4],["P",4]];
 
-const SCHEMES=["air raid","triple option","spread","pro style","4-2-5 nickel","3-3-5","wide-9 front","two-gap 3-4"];
+const OFF_SCHEMES=["air raid","triple option","spread","pro style","zone-run","gun option","pistol spread"];
+const DEF_SCHEMES=["4-2-5 nickel","3-3-5","wide-9 front","two-gap 3-4","bear front","press-quarters","tite front"];
+function collegeScheme(pos){
+  return POSGROUP[pos]==="d" ? pick(DEF_SCHEMES)
+       : POSGROUP[pos]==="o" ? pick(OFF_SCHEMES)
+       : pick(OFF_SCHEMES.concat(DEF_SCHEMES));
+}
 
 /* projection: what the player is likely to become, blended with what he is now */
 function projGrade(p){
@@ -1643,12 +1763,12 @@ function makeProspect(){
   const p=makePlayer(pos,cur,age,{exp:0,potGap:gapRoll,spread:7.5});
   p.isProspect=true;
 
-  const school=pick(SCHOOLS);
-  const tier=school[1];
+  const school=pickSchool();
+  const tier=schoolTier(school);
   const ctx={
     school:school[0], tier, region:school[2],
     usage: clamp(gauss(0.85,0.16),0.30,1.0),
-    scheme: pick(SCHEMES),
+    scheme: collegeScheme(pos),
     fit:   clamp(gauss(0.86,0.15),0.35,1.0),
     mates: clamp(gauss(0.82,0.17),0.35,1.0),
     starts: ri(1,4),
@@ -1965,6 +2085,23 @@ function aiPickValue(t,p){
 function trimDraftRecord(p){
   if(p.draft){ delete p.draft.noteBank; delete p.draft.hype; }
 }
+/* once a man is three years a pro, keep the facts and drop the file */
+function archiveDraftRecord(p){
+  const d=p.draft;
+  if(!d||d.archived) return 0;
+  const before=JSON.stringify(d).length;
+  const keep={
+    archived:true,
+    year:d.year, round:d.round, pick:d.pick, pickedAt:d.pickedAt,
+    undrafted:d.undrafted, userEst:d.userEst,
+    school:(d.ctx&&d.ctx.school)||d.school,
+    region:(d.ctx&&d.ctx.region)||d.region,
+    consensus:d.consensus!==undefined?Math.round(d.consensus):undefined
+  };
+  for(const k in keep) if(keep[k]===undefined) delete keep[k];
+  p.draft=keep;
+  return before-JSON.stringify(keep).length;
+}
 function makeDraftPick(pickObj,pid){
   const t=S.teams[pickObj.team], p=S.players[pid];
   pickObj.pid=pid;
@@ -2050,6 +2187,23 @@ function teamTint(){
   document.documentElement.style.setProperty("--team",t.color||"#2E5E4E");
   document.documentElement.style.setProperty("--teamink",lum>0.62?"#12181D":"#fff");
 }
+/* every screen you leave is pushed here so you can always step back */
+const NAVKEYS=["screen","teamTab","leagueTab","officeTab","ownerTab","scoutPos","standView","teamView"];
+function navSnapshot(){ const o={}; for(const k of NAVKEYS) o[k]=V[k]; return o; }
+function navPush(){
+  const now=navSnapshot();
+  V.back=V.back||[];
+  const top=V.back[V.back.length-1];
+  if(top&&NAVKEYS.every(k=>top[k]===now[k])) return;   // nothing actually moved
+  V.back.push(now);
+  if(V.back.length>30) V.back.shift();
+}
+function navBack(){
+  if(!(V.back||[]).length) return false;
+  const prev=V.back.pop();
+  for(const k of NAVKEYS) V[k]=prev[k];
+  return true;
+}
 function render(){
   if(atMenu()){
     $("hdr").innerHTML=`<div class="who"><b>The Front Office</b></div>`;
@@ -2079,8 +2233,10 @@ function render(){
 function renderHeader(){
   const t=S.teams[S.userTeam];
   const sp=capSpace(t);
+  const can=(V.back||[]).length>0;
   $("hdr").innerHTML=`
-    <div class="crest" style="background:${t.color}">${t.abbr.slice(0,3)}</div>
+    ${can?`<button class="backbtn" data-act="back" aria-label="Back">‹</button>`
+         :`<div class="crest" style="background:${t.color}">${t.abbr.slice(0,3)}</div>`}
     <div class="who"><b>${esc(t.city)} ${esc(t.name)}</b>
       <span>${t.w}-${t.l}${t.t?"-"+t.t:""} &nbsp;·&nbsp; ${phaseLabel()}</span></div>
     <div class="cap"><i>cap space</i>${fmtM(sp)}</div>`;
@@ -2185,9 +2341,10 @@ function ownerStrip(){
   const p=S.owner.patience;
   const m=MANDATES[S.owner.mandate]||MANDATES.playoffs;
   const own=S.teams[S.userTeam].ownerName;
-  return `<div class="pb click" data-act="nav" data-arg="owner"><div class="row spread">
-      <span class="small">${own?esc(own)+" — ":""}<b>${esc(m.name)}</b></span>
+  return `<div class="pb click" data-act="nav" data-arg="owner">
+    <div class="row spread"><span class="small"><b>${esc(m.name)}</b></span>
       <span class="tiny dim">${p>=70?"delighted":p>=50?"satisfied":p>=32?"restless":p>=16?"unhappy":"done with you"}</span></div>
+    <p class="tiny dim wrap">${own?esc(own)+" — ":""}${esc(m.blurb||m.want||"")}</p>
     <div class="meter"><i class="${p>=60?"green":p>=32?"":"red"}" style="width:${p}%"></i></div></div>`;
 }
 function bigButton(){
@@ -2375,15 +2532,20 @@ const SCREENS_TEAM=function(){
       +(own?`<div class="pb"><button class="btn" data-act="stafftask" data-arg="depth">Let the coaches set it</button></div>`:"")
       +POS.map(pos=>{
       const d=(t.depth[pos]||[]).map(id=>S.players[id]).filter(Boolean);
-      const rows=d.map((p,i)=>`<div class="row spread depthrow">
-        <span class="small">${i===0?'<b class="tag">1</b>':`<span class="num d">${i+1}</span>`}
-          <span class="click" data-act="player" data-arg="${p.id}">${esc(p.l)}</span>
-          <span class="num">${p.ovr}</span>${p.injury>0?' <span class="tag red">out</span>':p.holdout?' <span class="tag warn">held out</span>':""}</span>
-        ${own&&i>0?`<button class="mini" data-act="promote" data-arg="${pos}" data-arg2="${p.id}">▲ up</button>`:""}
-      </div>`).join("");
-      return `<div class="depthgrp"><div class="row spread" style="margin-bottom:4px">
-        <span>${posTag(pos)}</span><span class="tiny dim">${d.length} deep</span></div>
-        ${rows||"<i class='dim small'>empty</i>"}</div>`;
+      const rows=d.map((p,i)=>`<tr class="${i===0?"starter":""}">
+        <td class="n dim" style="width:26px">${i+1}</td>
+        <td class="click" data-act="player" data-arg="${p.id}">
+          <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
+            :p.holdout?' <span class="tag warn">held out</span>':""}
+          <div class="tiny dim">${esc(p.f)} · ${p.age} · ${fitWord(schemeFit(p))}</div></td>
+        <td class="n ovrcell">${p.ovr}</td>
+        <td style="width:52px">${own&&i>0?`<button class="mini" data-act="promote" data-arg="${pos}" data-arg2="${p.id}">▲</button>`:""}</td>
+      </tr>`).join("");
+      return `<div class="depthgrp"><div class="row spread depthhead">
+        <span>${posTag(pos)} <b class="small">${POSNAME[pos]||pos}</b></span>
+        <span class="tiny dim">${d.length} deep</span></div>
+        ${rows?`<table class="depthtable"><tbody>${rows}</tbody></table>`
+              :"<div class='pb muted small'>Nobody here.</div>"}</div>`;
     }).join("");
   } else {
     const ps=t.roster.map(id=>S.players[id]).filter(p=>p&&p.stats.gp);
@@ -2568,12 +2730,29 @@ function gradeLetter(g){
 function tierMark(t){return ["","blue blood","major","mid-major","small school"][t];}
 
 /* ============================ SCOUTING ============================ */
+function collegeMapPanel(){
+  const top=schoolStanding(8);
+  const risen=SCHOOLS.filter(s=>(S.schoolW[s[0]]||s[3])>s[3]*1.35).map(s=>s[0]);
+  const gone=SCHOOLS.filter(s=>s[3]>=8&&(S.schoolW[s[0]]||s[3])<s[3]*0.62).map(s=>s[0]);
+  const word=["blue chip","strong","solid","small"];
+  return `<div class="panel"><div class="ph"><h3>Where the players are coming from</h3>
+      <span class="sub">our people's beat</span></div>
+    <div class="pb tight"><table class="stat"><tbody>${top.map((s,i)=>`<tr>
+      <td>${i+1}. ${esc(s[0])} <span class="dim">${esc(s[2])}</span></td>
+      <td class="dim">${word[schoolTier(s)-1]}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${risen.length||gone.length?`<div class="pb tight"><p class="tiny dim">${
+      risen.length?`On the rise: ${risen.slice(0,3).map(esc).join(", ")}. `:""}${
+      gone.length?`Gone quiet: ${gone.slice(0,3).map(esc).join(", ")}.`:""}</p></div>`:""}
+  </div>`;
+}
 const SCREENS_SCOUT=function(){
   const t=S.teams[S.userTeam];
   if(!S.prospects.length&&S.phase!=="draft")
     return `<div class="panel"><div class="pb">
       <h2>No class on the board</h2>
-      <p class="muted">Next year's class is posted when the season kicks off.</p></div></div>`;
+      <p class="muted">Next year's class is posted when the season kicks off.</p></div></div>`
+      + collegeMapPanel();
   let list=S.prospects.map(id=>S.players[id]);
   if(V.scoutPos!=="ALL") list=list.filter(p=>p.pos===V.scoutPos||
     (V.scoutPos==="OL"&&OL.includes(p.pos))||(V.scoutPos==="DB"&&(p.pos==="CB"||p.pos==="S")));
@@ -2602,7 +2781,8 @@ const SCREENS_SCOUT=function(){
       <td class="n">${known&&Math.abs(gap)>=3?`<span class="tag ${gap>0?"gold":"red"}">${gap>0?"+":""}${Math.round(gap)}</span>`:""}
         <div class="meter" style="margin-top:4px"><i style="width:${Math.round(r.k)}%"></i></div></td>
     </tr>`;}).join("");
-  return `<div class="panel">
+  return collegeMapPanel()
+    + `<div class="panel">
     <div class="ph"><h2>Scouting</h2><span class="sub">${Math.round(t.scoutPts)} hours left</span></div>
     <div class="pb stack">
       <div class="chips">${posFilters.map(p=>
@@ -2737,6 +2917,7 @@ function playerSheet(pid){
     if(st.fga) out.push(`${st.fgm}/${st.fga} FG`);
     return out.join(" · ");
   };
+  const numbers=statHeadline(p)+statTablesFor(p);
   const attrs=POSATTRS[p.pos].map(k=>`
     <div class="spread" style="gap:10px"><span class="small" style="width:110px">${ATTRNAME[k]}</span>
       <div class="meter" style="flex:1"><i style="width:${p.a[k]}%"></i></div>
@@ -2757,10 +2938,10 @@ function playerSheet(pid){
     ${p.injury>0?`<div class="panel"><div class="pb"><span class="tag red">Out ${p.injury} weeks</span>
       <span class="small"> ${esc(p.injDesc)}</span></div></div>`:""}
     <div class="panel"><div class="ph"><h3>Attributes</h3></div><div class="pb stack">${attrs}</div></div>
-    ${line(s)||line(ls)?`<div class="panel"><div class="ph"><h3>Production</h3></div><div class="pb stack">
-      ${line(s)?`<div><span class="muted small">${S.year}</span><br>${line(s)}</div>`:""}
-      ${line(ls)?`<div><span class="muted small">${S.year-1}</span><br>${line(ls)}</div>`:""}
-    </div></div>`:""}
+    ${numbers?`<div class="panel"><div class="ph"><h3>Production</h3>
+      <span class="sub">${(p.seasonLog||[]).length+((p.stats&&p.stats.gp)?1:0)} season${
+        ((p.seasonLog||[]).length+((p.stats&&p.stats.gp)?1:0))===1?"":"s"}</span></div>
+      ${numbers}</div>`:`<div class="panel"><div class="pb muted small">He hasn't played a down yet.</div></div>`}
     ${p.accolades.length?`<div class="panel"><div class="ph"><h3>Honors</h3></div><div class="pb">
       ${p.accolades.slice(-8).reverse().map(a=>`<div class="small">${a.year} — ${esc(a.award)}</div>`).join("")}</div></div>`:""}
     ${p.draft&&p.draft.ctx?`<div class="panel"><div class="pb small muted">
@@ -3024,11 +3205,11 @@ const SCREENS={hub:SCREENS_HUB,team:SCREENS_TEAM,league:SCREENS_LEAGUE,
 
 /* ============================ ACTIONS ============================ */
 const ACT={
-  nav:(a)=>{V.screen=a;if(a==="team")V.viewTeam=null;V.scrollY=0;render();},
-  teamtab:a=>{V.teamTab=a;render();},
-  leaguetab:a=>{V.leagueTab=a;render();},
-  officetab:a=>{V.officeTab=a;render();},
-  spos:a=>{V.scoutPos=a;render();},
+  nav:(a)=>{ navPush(); V.screen=a;if(a==="team")V.viewTeam=null;V.scrollY=0;render();},
+  teamtab:a=>{ navPush();V.teamTab=a;render();},
+  leaguetab:a=>{ navPush();V.leagueTab=a;render();},
+  officetab:a=>{ navPush();V.officeTab=a;render();},
+  spos:a=>{ navPush(); V.scoutPos=a;render();},
   tourgo:()=>{
     const tr=tourState(), s=TOUR[tr.step];
     if(s){ if(s.tab) V[s.tab[0]]=s.tab[1]; V.screen=s.go; }
@@ -3062,6 +3243,7 @@ const ACT={
     if(c.includes(+a)) return; if(c.length>=3) c.shift(); c.push(+a);
     closeSheet(); V.screen="team"; V.teamTab="roster"; render(); },
   clearcompare:()=>{ V.compare=[]; render(); },
+  back:()=>{ if(navBack()) render(); },
   setplan:a=>{ S.gameplan=a; render(); },
   dismisshint:a=>{ S.hintsSeen=S.hintsSeen||[]; S.hintsSeen.push(a); render(); },
   lsearch:(a,b,ev)=>{ V.leagueQ=ev.target.value; render(); },
@@ -3093,8 +3275,8 @@ const ACT={
     render();
   },
   team:a=>{V.viewTeam=+a;V.screen="team";render();},
-  myteam:()=>{V.viewTeam=null;render();},
-  gototeam:a=>{ closeSheet(); V.viewTeam=+a; V.screen="team"; V.teamTab="roster"; render(); },
+  myteam:()=>{ navPush(); navPush();V.viewTeam=null;render();},
+  gototeam:a=>{ navPush(); navPush(); closeSheet(); V.viewTeam=+a; V.screen="team"; V.teamTab="roster"; render(); },
   player:a=>openSheet(playerSheet(+a)),
   prospect:a=>openSheet(prospectSheet(+a)),
   closesheet:()=>{ if(typeof autoFinishLive==="function") autoFinishLive(); closeSheet(); render(); },
@@ -3415,6 +3597,20 @@ function pruneState(){
     if(p.draft&&p.draft.noteBank&&!p.isProspect) delete p.draft.noteBank;
     delete p.lastStats;
   }
+  // the paperwork on a man three years into his career is no longer needed
+  const rostered=new Set();
+  for(const t of S.teams) for(const id of t.roster.concat(t.ir||[],t.ps||[])) rostered.add(+id);
+  for(const id in S.players){
+    const p=S.players[id];
+    if(!p) continue;
+    if(!p.isProspect&&p.draft&&!p.draft.archived&&((p.exp||0)>=3||p.retired))
+      archiveDraftRecord(p);
+    // season-by-season lines are for men still in the league
+    if(p.seasonLog&&p.seasonLog.length){
+      const cap = rostered.has(+id) ? 14 : (p.retired?2:4);
+      if(p.seasonLog.length>cap) p.seasonLog.length=cap;
+    }
+  }
   for(const t of S.teams){
     t.ir=(t.ir||[]).filter(id=>S.players[id]);
     t.ps=(t.ps||[]).filter(id=>S.players[id]);
@@ -3492,6 +3688,7 @@ function advance(){
       ageStaff();
       runCarousel();
       generateJobOffers();
+      driftSchoolWeights();
       hallOfFameIntake(offseasonProgress());
       buildRecap();          // now that everyone has developed or declined
       rollContracts();
@@ -3610,6 +3807,7 @@ function migrateSave(){
     if(!c.hidden||c.hidden.pot===undefined) rollCoachPotential(c);
     if(c.value===undefined) c.value=coachValue(c);
   }
+  if(!S.schoolW) initSchoolWeights();
   if(!S.tagUsed) S.tagUsed={};
   if(!S.gameplan) S.gameplan="balanced";
   if(!S.hintsSeen) S.hintsSeen=[];
@@ -3658,7 +3856,7 @@ function freshState(seed){
     classYear:0, predraftWeek:0, shopOffers:null,
     staffMarket:[], tradeInbox:[], tapeWatch:[], jobOffers:[], moment:null,
     tour:{step:0,done:false,dismissed:false}, slotInfo:[],
-    auto:{depth:true,ir:true,squad:true,cuts:true},
+    auto:{depth:true,ir:true,squad:true,cuts:true}, schoolW:null, schoolBag:null,
     career:null, relocations:[], reloNotice:null, lastRelocation:0, leagueStart:0, norms:{pos:{},attr:{}},
     holdouts:[], awards:[], tagUsed:{}, digest:null, recap:null,
     board:null, gameplan:"balanced", hintsSeen:[],
@@ -7608,6 +7806,89 @@ function menuGuideSheet(){
     </div>`;
 }
 function atMenu(){ return V.screen==="menu"; }
+
+/* ============================================================
+   A player's numbers, set out as numbers
+   ============================================================ */
+const STAT_GROUPS={
+  pass:{name:"Passing", cols:[["gp","G"],["pc","Cmp"],["pa","Att"],["pct","Pct"],
+        ["py","Yds"],["ypa","Y/A"],["ptd","TD"],["pint","Int"],["rate","Rtg"]],
+        has:s=>s.pa>0},
+  rush:{name:"Rushing", cols:[["gp","G"],["ra","Car"],["ry","Yds"],["ypc","Avg"],
+        ["rtd","TD"],["fum","Fum"]], has:s=>s.ra>0},
+  recv:{name:"Receiving", cols:[["gp","G"],["rec","Rec"],["recy","Yds"],["ypr","Avg"],
+        ["rectd","TD"]], has:s=>s.rec>0},
+  def:{name:"Defence", cols:[["gp","G"],["tkl","Tkl"],["sak","Sk"],["int","Int"],
+        ["pd","PD"],["ff","FF"]], has:s=>s.tkl>0||s.sak>0},
+  kick:{name:"Kicking", cols:[["gp","G"],["fgm","FGM"],["fga","FGA"],["fgpct","Pct"],
+        ["xpm","XP"]], has:s=>s.fga>0},
+  punt:{name:"Punting", cols:[["gp","G"],["pun","Punts"],["puny","Yds"],["punavg","Avg"]],
+        has:s=>s.pun>0}
+};
+function statVal(s,k){
+  const n=v=>v||0;
+  switch(k){
+    case "pct":    return s.pa? (n(s.pc)/s.pa*100).toFixed(1) : "—";
+    case "ypa":    return s.pa? (n(s.py)/s.pa).toFixed(1) : "—";
+    case "ypc":    return s.ra? (n(s.ry)/s.ra).toFixed(1) : "—";
+    case "ypr":    return s.rec? (n(s.recy)/s.rec).toFixed(1) : "—";
+    case "fgpct":  return s.fga? Math.round(n(s.fgm)/s.fga*100)+"%" : "—";
+    case "punavg": return s.pun? (n(s.puny)/s.pun).toFixed(1) : "—";
+    case "rate":   return s.pa? passerRating(s) : "—";
+    default:       return n(s[k]);
+  }
+}
+function passerRating(s){
+  if(!s.pa) return "—";
+  const a=clamp(((s.pc||0)/s.pa-0.3)*5,0,2.375);
+  const b=clamp(((s.py||0)/s.pa-3)*0.25,0,2.375);
+  const c=clamp(((s.ptd||0)/s.pa)*20,0,2.375);
+  const d=clamp(2.375-((s.pint||0)/s.pa*25),0,2.375);
+  return ((a+b+c+d)/6*100).toFixed(1);
+}
+/* which tables a man needs, from what he has actually done */
+function statTablesFor(p){
+  const rows=[];
+  const seasons=(p.seasonLog||[]).slice();
+  const cur=p.stats||{};
+  if(cur.gp) rows.push({year:S.year, team:p.teamId!==null&&S.teams[p.teamId]?S.teams[p.teamId].abbr:"—", s:cur});
+  for(const e of seasons) rows.push(e);
+  if(!rows.length) return "";
+  const groups=Object.keys(STAT_GROUPS).filter(g=>rows.some(r=>STAT_GROUPS[g].has(r.s)));
+  if(!groups.length) return "";
+  return groups.map(g=>{
+    const G=STAT_GROUPS[g];
+    const use=rows.filter(r=>G.has(r.s));
+    const tot={};
+    for(const r of use) for(const k in r.s)
+      if(typeof r.s[k]==="number") tot[k]=(tot[k]||0)+r.s[k];
+    return `<div class="ph"><h3>${G.name}</h3></div>
+      <div class="statwrap"><table class="stat"><thead><tr><th>Season</th>
+        ${G.cols.map(c=>`<th>${c[1]}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${use.map(r=>`<tr><td>${r.year}${r.team?` <span class="dim">${esc(r.team)}</span>`:""}</td>
+          ${G.cols.map(c=>`<td>${statVal(r.s,c[0])}</td>`).join("")}</tr>`).join("")}
+        ${use.length>1?`<tr class="tot"><td>Career</td>
+          ${G.cols.map(c=>`<td>${statVal(tot,c[0])}</td>`).join("")}</tr>`:""}
+      </tbody></table></div>`;
+  }).join("");
+}
+/* the headline figures, big enough to read at a glance */
+function statHeadline(p){
+  const s=p.stats||{};
+  if(!s.gp) return "";
+  const pick3=[];
+  if(s.pa){ pick3.push([s.py||0,"Pass yds"],[s.ptd||0,"TD"],[passerRating(s),"Rating"]); }
+  else if(s.ra&&(s.ra>=(s.rec||0))){ pick3.push([s.ry||0,"Rush yds"],
+      [(s.ra?((s.ry||0)/s.ra).toFixed(1):"—"),"Per carry"],[s.rtd||0,"TD"]); }
+  else if(s.rec){ pick3.push([s.rec,"Catches"],[s.recy||0,"Yds"],[s.rectd||0,"TD"]); }
+  else if(s.fga){ pick3.push([`${s.fgm||0}/${s.fga}`,"Field goals"],
+      [Math.round((s.fgm||0)/s.fga*100)+"%","Success"],[s.xpm||0,"Extra points"]); }
+  else if(s.pun){ pick3.push([s.pun,"Punts"],[((s.puny||0)/s.pun).toFixed(1),"Average"],[s.gp,"Games"]); }
+  else { pick3.push([s.tkl||0,"Tackles"],[s.sak||0,"Sacks"],[s.int||0,"Picks"]); }
+  return `<div class="pb grid3">${pick3.map(([v,l])=>
+    `<div class="stat"><b class="midnum">${v}</b><span>${l}</span></div>`).join("")}</div>`;
+}
 boot();
 </script>
 </body>
