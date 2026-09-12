@@ -220,6 +220,15 @@ tbody tr.click:active{background:var(--paper2)}
 .tag.green{border-color:var(--field);color:var(--field);background:#E7F0EA}
 .tag.blue{border-color:var(--blue);color:var(--blue);background:#E8EEF6}
 .starmark{color:var(--gold)}
+/* a text banner — says something, so it has to be readable */
+.callout{padding:9px 12px;border-radius:4px;background:var(--paper2);
+  border-left:3px solid var(--ink3);margin:0 0 8px;font-size:13px;line-height:1.45;
+  color:var(--ink);white-space:normal;overflow:visible}
+.callout b{font-weight:700}
+.callout.green{border-left-color:var(--field2);background:rgba(46,94,78,.07)}
+.callout.red{border-left-color:var(--loss);background:rgba(150,52,52,.07)}
+.callout.warn{border-left-color:var(--gold);background:rgba(184,150,74,.09)}
+/* the scouting grade meter, which is a bar and not words */
 .band{position:relative;height:8px;background:var(--rule2);border-radius:2px;overflow:hidden}
 .band i{position:absolute;top:0;bottom:0;background:var(--field);opacity:.35}
 .band u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink);text-decoration:none}
@@ -1979,11 +1988,11 @@ function myGrade(pid){
   return {est:clamp(est,30,99), band, k, lo:clamp(est-band,28,99), hi:clamp(est+band,30,99)};
 }
 const ACTIONS={
-  tape:    {name:"Study tape",       cost:8,  gain:16, desc:"All-22 from the season. The bread and butter."},
-  game:    {name:"Scout live",       cost:18, gain:30, desc:"Send a scout to see him in person."},
-  interview:{name:"Interview",       cost:14, gain:10, desc:"Character, work habits, football intelligence."},
-  medical: {name:"Medical check",    cost:12, gain:8,  desc:"Injury history and long-term durability."},
-  workout: {name:"Private workout",  cost:22, gain:20, desc:"Reveals how much room is left to grow."}
+  tape:    {name:"Study tape",       cost:3,  gain:16, desc:"All-22 from the season. Your area men file these by the hundred."},
+  game:    {name:"Scout live",       cost:6,  gain:30, desc:"Send somebody to see him play."},
+  interview:{name:"Interview",       cost:4,  gain:10, desc:"Character, work habits, football intelligence."},
+  medical: {name:"Medical check",    cost:3,  gain:8,  desc:"Injury history and long-term durability."},
+  workout: {name:"Private workout",  cost:7,  gain:20, desc:"Bring him in. Reveals how much room is left to grow."}
 };
 function doScout(pid,action,scoutId){
   const t=S.teams[S.userTeam], r=S.scout[pid], p=S.players[pid];
@@ -2377,7 +2386,7 @@ const SCREENS_HUB=function(){
     .sort((a,b)=>b.ovr-a.ovr);
   return `
   ${S.owner&&S.owner.fired?`<div class="panel"><div class="pb">
-    <div class="band red"><b>You were let go.</b> ${S.year} was one season too many.</div>
+    <div class="callout red"><b>You were let go.</b> ${S.year} was one season too many.</div>
     <p class="small">The record book, the hall, and every name you drafted are still here to look at.
       When you're ready, start again.</p>
     <button class="btn primary big" data-act="newjob">Take another job</button>
@@ -2393,17 +2402,17 @@ const SCREENS_HUB=function(){
           <button class="mini" data-act="holdout" data-arg="${id}" data-arg2="trade">Shop him</button>
         </div></div>`;}).join("")}</div></div>`:""}
   ${S.reloNotice?`<div class="panel"><div class="pb">
-    <div class="band red">Ownership has filed to move the club to ${esc(S.reloNotice.to[0])}.
+    <div class="callout red">Ownership has filed to move the club to ${esc(S.reloNotice.to[0])}.
       The vote is next spring and you don't have one.</div>
     <p class="tiny dim">The roster comes with you. The city doesn't.</p>
   </div></div>`:""}
   ${(S.jobOffers&&S.jobOffers.length)?`<div class="panel"><div class="pb">
-    <div class="band green">${S.jobOffers.length===1?"A club has":`${S.jobOffers.length} clubs have`}
+    <div class="callout green">${S.jobOffers.length===1?"A club has":`${S.jobOffers.length} clubs have`}
       asked about your services.</div>
     <button class="btn primary big" data-act="joboffers">Hear them out</button>
   </div></div>`:""}
   ${S.scramble?`<div class="panel"><div class="pb">
-    <div class="band">The phones are still open — ${S.scramble.clock===1?"one undrafted call"
+    <div class="callout">The phones are still open — ${S.scramble.clock===1?"one undrafted call"
       :`${S.scramble.clock} undrafted calls`} left.</div>
     <button class="btn primary big" data-act="nav" data-arg="scramble">Back to the scramble</button>
   </div></div>`:""}
@@ -3180,7 +3189,7 @@ const SCREENS_OFFICE=function(){
       </tr>`).join("")}</tbody></table>`;
   } else {
     body=`<div class="pb stack">
-      ${S.saveOK===false?`<div class="band red">This browser isn't storing the league. It only
+      ${S.saveOK===false?`<div class="callout red">This browser isn't storing the league. It only
         exists in memory and will be gone when you close the tab — download a file now.</div>`
         :S.savedAt?`<p class="tiny dim">Last saved ${(()=>{const m=Math.round((Date.now()-S.savedAt)/60000);
           return m<1?"a moment ago":m===1?"a minute ago":`${m} minutes ago`;})()}.</p>`:""}
@@ -3454,8 +3463,8 @@ document.addEventListener("change",e=>{
 function scoutBudget(t){
   const sd=t.staff.SD;
   const dept=effLvl(t,"scoutdept");
-  const bought=Math.round((t.scoutInvest||0)*0.6);
-  return Math.round(17 + (sd?sd.dev:60)/7 + t.scouts.length*1.6 + (dept-2)*4 + bought);
+  const bought=Math.round((t.scoutInvest||0)*5.5);
+  return Math.round(115 + (sd?sd.dev:60)/1.1 + t.scouts.length*19 + (dept-2)*56 + bought);
 }
 function grantScoutPts(){
   for(const t of S.teams) if(t.id===S.userTeam) t.scoutPts+=scoutBudget(t);
@@ -4541,7 +4550,7 @@ const SCREENS_TRADE=function(){
       <h3>${esc(t.city)} ${esc(t.name)}</h3>
       <span class="sub"><button class="chip" data-act="tradeback">Change club</button></span></div>
     <div class="pb">
-      <div class="band ${both&&!illegal&&v.accept?"green":"warn"}">${mood}</div>
+      <div class="callout ${both&&!illegal&&v.accept?"green":"warn"}">${mood}</div>
       <div class="row spread small">
         <span class="dim">${st.mine.length} ${st.mine.length===1?"piece":"pieces"} out</span>
         <span class="dim">${st.theirs.length} back${v.need?" · they're short at that spot":""}</span>
@@ -5340,7 +5349,7 @@ const SCREENS_SCRAMBLE=function(){
   return `<div class="panel">
     <div class="ph"><h2>Undrafted free agents</h2>
       <span class="sub">${sc.clock===1?"one call left":`${sc.clock} calls left`}</span></div>
-    ${t.roster.length>=ROSTER_MAX+6?`<div class="pb"><div class="band warn">
+    ${t.roster.length>=ROSTER_MAX+6?`<div class="pb"><div class="callout warn">
       You're carrying ${t.roster.length} men. Nobody else can be signed until you make room.</div>
       <button class="btn" data-act="stafftask" data-arg="trim">Have the staff trim it</button></div>`:""}
     <div class="pb small muted">Seven rounds are gone and the phones are open. Every call takes time,
@@ -5381,7 +5390,7 @@ const SCREENS_OWNER=function(){
       <div class="row spread"><b>${esc(t.ownerName||"The owner")}</b>
         <span class="tiny dim">${!o.tenure?"newly in charge"
           :o.tenure===1?"a year in charge":`${o.tenure} years in charge`}</span></div>
-      <div class="band ${tone}"><b>${esc(m.name)}</b> — ${esc(m.blurb)}</div>
+      <div class="callout ${tone}"><b>${esc(m.name)}</b> — ${esc(m.blurb)}</div>
       <div class="row spread"><span class="small">Standing with the owner</span>
         <span class="small"><b>${pct>=75?"delighted":pct>=55?"satisfied":pct>=35?"restless"
           :pct>=18?"openly unhappy":"finished with you"}</b></span></div>
@@ -7119,13 +7128,13 @@ function digestPanel(){
   if(!d||d.week<1) return "";
   if(!d.result) return `<div class="panel"><div class="ph"><h3>Week ${d.week}</h3>
       <span class="sub">${esc(d.record)} · ${ordinal(d.rank)} in the league</span></div>
-    <div class="pb"><div class="band">Bye week — no game.</div>
+    <div class="pb"><div class="callout">Bye week — no game.</div>
       ${d.note?`<p class="tiny dim">${esc(d.note)}</p>`:""}</div></div>`;
   const r=d.result;
   return `<div class="panel"><div class="ph"><h3>Week ${d.week}</h3>
       <span class="sub">${esc(d.record)} · ${ordinal(d.rank)} in the league</span></div>
     <div class="pb">
-      <div class="band ${r.won?"green":r.tie?"":"red"}">
+      <div class="callout ${r.won?"green":r.tie?"":"red"}">
         ${r.won?"Won":r.tie?"Tied":"Lost"} ${r.us}–${r.them} ${r.home?"at home to":"away at"} ${esc(r.opp)}
       </div>
       ${d.injuries.length?`<p class="small"><b>Out of the game:</b> ${d.injuries.map(i=>
@@ -7156,7 +7165,7 @@ function recapPanel(){
   if(!r) return `<div class="pb muted">Nothing to review yet.</div>`;
   const line=r.champ?"Champions.":r.playoffs?`Made the field as the ${ordinal(r.seed)} seed.`:"Missed out.";
   return `<div class="pb">
-      <div class="band ${r.champ?"green":r.playoffs?"":"warn"}"><b>${r.year}: ${r.w}-${r.l}</b> — ${line}</div>
+      <div class="callout ${r.champ?"green":r.playoffs?"":"warn"}"><b>${r.year}: ${r.w}-${r.l}</b> — ${line}</div>
       <div class="row spread small"><span>Scored ${r.pf}</span><span>Allowed ${r.pa}</span>
         <span>${r.pf-r.pa>=0?"+":""}${r.pf-r.pa}</span></div>
     </div>
