@@ -373,6 +373,9 @@ const OVRW = {
 // roster construction targets
 const ROSTER_NEED = {QB:3,RB:4,WR:6,TE:3,LT:2,LG:2,C:2,RG:2,RT:2,EDGE:5,DT:5,LB:5,CB:6,S:4,K:1,P:1};
 const ROSTER_MAX = 53;
+/* The scale everything is judged against. A roster loaded from anywhere is
+   normalised onto it, and draft classes are pitched against it. */
+const LEAGUE_MEAN = 70, LEAGUE_SD = 9;
 
 /* ---------- physical templates: [htIn mean/sd, wt mean/sd] ---------- */
 const BODY = {
@@ -497,17 +500,29 @@ function schoolStanding(n){
 const REGIONS = ["East","South","Midwest","West"];
 
 /* ---------- money ---------- */
-const CAP_BASE = 255e6;
-const MIN_SALARY = 1.0e6;
+const CAP_BASE = 301.2e6;   // the real 2026 ceiling
+const MIN_SALARY = 885e3;                        // a rookie on the active roster
+const MIN_LADDER = [885e3, 1005e3, 1075e3, 1145e3, 1215e3, 1215e3, 1215e3, 1300e3];
+const VESTED_SEASONS = 4;                        // when a man becomes a vested veteran
+const ROOKIE_YEARS = 4;                          // every drafted player signs four
+const FIFTH_YEAR_ROUND = 1;                      // and the first round carries an option
 const ROOKIE_SCALE = [ // by overall pick index (0-based) -> APY
   9.6e6,8.4e6,7.6e6,7.0e6,6.5e6,6.1e6,5.8e6,5.5e6,5.2e6,5.0e6
 ];
+/* The slot a pick is worth, as a share of the cap rather than a fixed sum, so
+   the pool grows with the league the way the real one does. The top of the
+   first round runs a shade over four per cent; the last rounds sit on the
+   minimum for a man with no credited seasons. */
 function rookieAPY(overall){
-  if(overall<10) return ROOKIE_SCALE[overall];
-  if(overall<32) return 4.8e6 - (overall-10)*0.10e6;
-  if(overall<64) return 2.4e6 - (overall-32)*0.022e6;
-  if(overall<105) return 1.55e6 - (overall-64)*0.005e6;
-  return Math.max(minSalary(), 1.30e6 - (overall-105)*0.002e6);
+  const cs=(typeof capScaleSafe==="function")?capScaleSafe():1;
+  let base;
+  if(overall<10) base=ROOKIE_SCALE[overall]*1.36;
+  else if(overall<32) base=6.5e6 - (overall-10)*0.145e6;
+  else if(overall<64) base=3.3e6 - (overall-32)*0.049e6;
+  else if(overall<105) base=1.73e6 - (overall-64)*0.0056e6;
+  else base=1.50e6 - (overall-105)*0.0035e6;
+  const floor=(typeof MIN_SALARY!=="undefined")?MIN_SALARY:885e3;
+  return Math.round(Math.max(floor, base)*cs/1e4)*1e4;
 }
 
 /* ---------- misc string helpers ---------- */
@@ -577,6 +592,20 @@ function marketAPY(p){
   const ceiling = S.cap*(p.pos==="QB"?0.175:0.125);
   return clamp(Math.round(v/1e5)*1e5, minSalary(), Math.round(ceiling));
 }
+/* what the floor is for this man, by service time, at today's cap */
+function minSalaryFor(p){
+  const yrs=clamp(Math.round((p&&p.exp)||0),0,MIN_LADDER.length-1);
+  return Math.round(MIN_LADDER[yrs]*capScaleSafe()/1e3)*1e3;
+}
+/* a vested veteran on a one-year minimum counts at the two-year rate */
+function vsbHit(p){
+  if(!p||!p.contract) return null;
+  if((p.exp||0)<VESTED_SEASONS) return null;
+  if(p.contract.years>1) return null;
+  if(p.contract.apy>minSalaryFor(p)*1.02) return null;
+  if((p.contract.bonus||0)>Math.round(190e3*capScaleSafe())) return null;
+  return Math.round(MIN_LADDER[2]*capScaleSafe()/1e3)*1e3;
+}
 function contractYears(p){
   if(p.age>=33) return ri(1,2);
   if(p.age>=30) return ri(1,3);
@@ -623,7 +652,7 @@ function signPlayer(p,teamId,apy,years,gtdPct){
   const a=Math.round(apy);
   const share=clamp(a/(S.cap*0.11),0,1);
   const bonusPct=clamp(0.06+share*0.58+((gtdPct||.45)-0.45)*0.12,0.06,0.64);
-  const st=contractHits(a,years,bonusPct);
+  const st=contractHits(a,years,bonusPct,minSalaryFor(p));
   p.contract={apy:a,years,left:years,signedYear:S.year,
     gtd:Math.round(a*years*(gtdPct||.45)),
     bonus:st.bonus, prorate:st.prorate, hits:st.hits,
@@ -704,7 +733,7 @@ function makeTeam(i){
     w:0,l:0,t:0, pf:0, pa:0, divW:0,divL:0,confW:0,confL:0,
     streak:0, seed:0, madePlayoffs:false,
     scoutBudget:0, scoutPts:0,
-    deadCap:0, history:[], ir:[], ps:[],
+    deadCap:0, history:[], ir:[], ps:[], _fill:null,
     ai:{ scoutSkill: clamp(gauss(.55,.18),.15,.95),
          aggression: rf(.3,.9), draftBPA: rf(.35,.85), winNow: rf(.2,.9) },
     prestige: c99(gauss(60,12))
@@ -757,16 +786,57 @@ function buildLeague(){
 }
 
 /* ---------- depth chart ---------- */
+/* How near one job is to another. Nothing is impossible — a quarterback can
+   line up at corner — but the further from home, the less of him you get. */
+const POS_KIN={
+  QB:{RB:3,WR:3,TE:4}, RB:{WR:2,TE:3,S:3,LB:3}, WR:{RB:2,TE:2,CB:3,S:3},
+  TE:{WR:2,RB:3,LT:3,RT:3,LG:3,RG:3,C:4,EDGE:3},
+  LT:{RT:1,LG:1,RG:2,C:2,TE:3}, RT:{LT:1,RG:1,LG:2,C:2,TE:3},
+  LG:{RG:1,C:1,LT:1,RT:2}, RG:{LG:1,C:1,RT:1,LT:2}, C:{LG:1,RG:1,LT:2,RT:2},
+  EDGE:{DT:1,LB:1,TE:3}, DT:{EDGE:1,LG:3,RG:3,C:3}, LB:{EDGE:1,S:1,DT:2,RB:3},
+  CB:{S:1,WR:2,RB:3}, S:{CB:1,LB:1,WR:3,RB:3}, K:{P:1}, P:{K:1}
+};
+function posDistance(from,to){
+  if(from===to) return 0;
+  const k=POS_KIN[from];
+  return (k&&k[to])||5;                  // anything unlisted is a long way from home
+}
+/* What a man is worth at a given spot, judged on what that spot actually asks
+   for, not on his rating somewhere else. */
+const SPECIALIST=["K","P"];
+function ovrAt(p,pos){
+  if(p.pos===pos) return p.ovr;
+  // his attributes barely move, so work each spot out once and keep it
+  if(p._at&&p._at.k===p.ovr){ const v=p._at[pos]; if(v!==undefined) return v; }
+  else p._at={k:p.ovr};
+  const val=ovrAtRaw(p,pos);
+  p._at[pos]=val;
+  return val;
+}
+function ovrAtRaw(p,pos){
+  // a leg is a trade of its own; nobody picks it up because he can throw
+  const meSpec=SPECIALIST.includes(p.pos), itSpec=SPECIALIST.includes(pos);
+  if(itSpec&&!meSpec) return Math.max(20,Math.round(38+((p.a.str||55)+(p.a.awr||55))/14));
+  if(meSpec&&!itSpec) return Math.max(20,Math.round(computeOVR(pos,p.a)*0.55));
+  const raw=computeOVR(pos,p.a);
+  const d=posDistance(p.pos,pos);
+  // learning a new job costs less if he sees the game well
+  const unfamiliar = d*2.4 * (1 - clamp(((p.a.awr||55)-50)/110,0,0.42));
+  return Math.max(20, Math.round(raw - unfamiliar));
+}
 function posScore(p,pos){
   // what your coordinator asks for counts as much as what the rating says
-  const fit = (typeof schemeFit==="function"&&p.pos===pos) ? (schemeFit(p)-50)*0.11 : 0;
-  if(p.pos===pos) return p.ovr+fit;
-  const near={LT:["RT","LG","RG","C"],RT:["LT","RG","LG","C"],LG:["RG","C","LT","RT"],
-    RG:["LG","C","RT","LT"],C:["LG","RG"],EDGE:["DT","LB"],DT:["EDGE"],LB:["EDGE","S"],
-    CB:["S"],S:["CB","LB"],WR:["TE"],TE:["WR"],RB:["TE"]};
-  const alt=near[pos]||[];
-  const i=alt.indexOf(p.pos);
-  return i<0 ? -99 : p.ovr - 6 - i*3;   // out of position, and it shows
+  if(p.pos===pos){
+    const fit = (typeof schemeFit==="function") ? (schemeFit(p)-50)*0.11 : 0;
+    return p.ovr+fit;
+  }
+  return ovrAt(p,pos);
+}
+/* the spots he could fill, best first */
+function bestOtherSpots(p,n){
+  return POS.filter(x=>x!==p.pos)
+    .map(x=>({pos:x, ovr:ovrAt(p,x), d:posDistance(p.pos,x)}))
+    .sort((a,b)=>b.ovr-a.ovr).slice(0,n||3);
 }
 function autoDepth(t){
   // if you've taken the chart off the coaches, they leave it alone
@@ -774,12 +844,45 @@ function autoDepth(t){
   const prev = t.depthManual ? (t.depth||{}) : null;
   t.depth={};
   const used={};
+  const taken={};                 // a man can hold one first-choice job, no more
+  // hand out the starting jobs first, best claim on each
+  const claims=[];
   for(const pos of POS){
-    const cands=t.roster.map(id=>S.players[id]).filter(p=>!p.retired)
-      .map(p=>({p,s:posScore(p,pos)-(used[p.id]?45:0)}))
-      .filter(x=>x.s>0).sort((a,b)=>b.s-a.s);
+    const need = pos==="WR"?3 : (pos==="LB"||pos==="CB"||pos==="DT")?2 : pos==="S"?2 : 1;
+    for(let slot=0;slot<need;slot++) claims.push({pos,slot});
+  }
+  claims.sort((a,b)=>a.slot-b.slot);
+  const men=t.roster.map(id=>S.players[id]).filter(p=>p&&!p.retired);
+  let sum=men.length*7919;
+  for(const p of men) sum=(sum+p.id*31+p.ovr)|0;
+  const oc=t.staff.OC, dc=t.staff.DC;
+  const stamp=`${sum}|${oc&&oc.scheme}|${dc&&dc.scheme}`;
+  let rank;
+  if(t._rank&&t._rank.stamp===stamp) rank=t._rank.r;
+  else {
+    rank={};
+    for(const pos of POS)
+      rank[pos]=men.map(p=>({p,s:posScore(p,pos)})).sort((a,b)=>b.s-a.s);
+    t._rank={stamp,r:rank};
+  }
+  for(const c of claims){
+    const row=rank[c.pos];
+    let best=null;
+    for(const x of row) if(!taken[x.p.id]){ best=x; break; }
+    if(best){ taken[best.p.id]=1; (t.depth[c.pos]=t.depth[c.pos]||[]).push(best.p.id); }
+  }
+  for(const pos of POS){
+    const first=t.depth[pos]||[];
+    first.forEach(id=>{used[id]=1;});
+    const fresh=[], spare=[];
+    for(const x of rank[pos]){
+      if(first.includes(x.p.id)) continue;
+      if(used[x.p.id]){ if(x.s-45>0) spare.push(x); }
+      else if(x.s>0) fresh.push(x);
+    }
+    const cands=fresh.concat(spare);
     const n = pos==="WR"?4:(pos==="RB"||pos==="TE"||pos==="LB"||pos==="DT"||pos==="EDGE"||pos==="CB")?3:pos==="S"?3:2;
-    let ids=cands.slice(0,n).map(x=>x.p.id);
+    let ids=first.concat(cands.slice(0,Math.max(0,n-first.length)).map(x=>x.p.id));
     if(prev&&prev[pos]){
       // a chart the user arranged by hand keeps its order; departed men drop out
       const keep=prev[pos].filter(id=>t.roster.includes(id)&&S.players[id]&&!S.players[id].retired);
@@ -798,7 +901,31 @@ function healthyStarter(t,pos,i){
   let k=0;
   for(const id of d){ const p=S.players[id];
     if(p&&!p.retired&&p.injury<=0&&!p.holdout){ if(k===(i||0)) return p; k++; } }
+  // nobody at the spot is fit: move somebody across, but only a man who isn't
+  // already holding down a job of his own, and work it out once not every play
+  const stamp=`${pos}|${t.roster.length}|${S.week}|${S.phase}`;
+  t._fill=t._fill||{};
+  if(t._fill[pos]&&t._fill[pos].stamp===stamp){
+    const c=t._fill[pos].list;
+    return c.length>(i||0) ? S.players[c[i||0]] : (d.length?S.players[d[0]]:null);
+  }
+  const listed=new Set(d);
+  const list=(t.roster||[]).map(id=>S.players[id])
+    .filter(p=>p&&!p.retired&&p.injury<=0&&!p.holdout&&!listed.has(p.id)
+              && !isStarterSomewhere(t,p))
+    .sort((a,b)=>ovrAt(b,pos)-ovrAt(a,pos))
+    .slice(0,4).map(p=>p.id);
+  t._fill[pos]={stamp,list};
+  if(list.length>(i||0)) return S.players[list[i||0]];
   return d.length?S.players[d[0]]:null;
+}
+/* is he already first choice at his own position? then he can't cover another */
+function isStarterSomewhere(t,p){
+  const own=(t.depth&&t.depth[p.pos])||[];
+  for(const id of own){ const q=S.players[id];
+    if(q&&!q.retired&&q.injury<=0&&!q.holdout) return q.id===p.id;
+  }
+  return false;
 }
 function unitRating(t,pos,weightArr){
   // weighted mean of top players at a position
@@ -1336,12 +1463,13 @@ function playWeek(){
   for(const g of games) simGame(g);
   // injuries tick, morale
   for(const t of S.teams){
+    let healed=false;
     for(const id of t.roster){const p=S.players[id];
       if(p.injury>0){
         p.injury--;
         if(p.injury>0 && rnd()<0.28*(healMult(t)-1)) p.injury--;
-        if(p.injury<=0){p.injury=0;p.injDesc="";}}}
-    autoDepth(t);
+        if(p.injury<=0){p.injury=0;p.injDesc=""; healed=true;}}}
+    if(healed) autoDepth(t);   // only when somebody's actually available again
   }
   weeklyNews(wk,games);
   S.week++;
@@ -1581,11 +1709,13 @@ function runFreeAgency(rounds){
         const need=needScore(t,p.pos);
         // teams sitting well under the cap floor get pushed into the market
         const floorPush=clamp((S.cap*0.90-payroll(t))/(S.cap*0.32),0,1);
-        if(need< (r<2?26:12)-floorPush*14) continue;
+        // the bar to get involved falls as the market wears on
+        const bar = (r<1?26 : r<2?18 : r<4?9 : 3) - floorPush*14;
+        if(need<bar) continue;
         const mv=faValue(p)*faMarkdown(p,r,rounds);
         const space=capSpace(t);
         const bid=Math.round(mv*(0.86+t.ai.aggression*0.34+floorPush*0.50)*(1+clamp(need,0,60)/260));
-        if(bid>space-6e6) continue;
+        if(bid>space-(r<3?6e6:1.5e6)) continue;
         offers.push({t,apy:bid,years:contractYears(p),user:false});
       }
       if(!offers.length) continue;
@@ -1762,12 +1892,50 @@ function athScore(c,pos){
   return Math.round((speed*w[0]+exp*w[1]+agi*w[2]+str*w[3])*100);
 }
 
+/* Where this league sits, so a class arrives on the same scale as the men
+   already in it rather than on whatever scale the generator was written for. */
+/* Where the class sits against the league. Rookies come in below the men
+   already there; this holds that distance whatever scale the league is on. */
+const ROOKIE_GAP=7;                       // how far a class sits below the league
+function classOffset(){
+  if(S.classOffset!==undefined) return S.classOffset;
+  const men=S.teams.flatMap(t=>t.roster.map(id=>S.players[id]))
+    .filter(p=>p&&!p.isProspect);
+  const leagueMean = men.length>=400 ? avg(men.map(p=>p.ovr)) : LEAGUE_MEAN;
+  // the generator's own class mean is about 63.5 before any shift
+  S.classOffset=Math.round((leagueMean-ROOKIE_GAP-63.5)*10)/10;
+  return S.classOffset;
+}
+/* No two classes are alike. Some years the room is full of players and some
+   years the board runs out in the third round. */
+function rollClassShape(){
+  const strong=gauss(0,2.3) + (chance(.10)? (chance(.5)?3.2:-3.2) : 0);
+  let depth=gauss(1,0.16);
+  if(chance(.12)) depth = chance(.5)? rf(1.22,1.42) : rf(0.62,0.80);
+  const top=chance(.14)? rf(1.5,2.6) : (chance(.14)? rf(0.35,0.7) : 1);
+  S.classShape={
+    strong:Math.round(strong*10)/10,
+    depth:Math.round(clamp(depth,0.55,1.5)*100)/100,
+    top:Math.round(clamp(top,0.3,2.8)*100)/100
+  };
+  return S.classShape;
+}
+function classShape(){ return S.classShape||rollClassShape(); }
+function classWord(){
+  const c=classShape();
+  const s = c.strong>=2.2?"a strong class" : c.strong<=-2.2?"a weak class" : "an ordinary class";
+  const d = c.depth>=1.18?"and a deep one" : c.depth<=0.8?"and a thin one" : "of usual depth";
+  const t = c.top>=1.6?" There are real players at the top."
+          : c.top<=0.65?" Nobody at the top of it excites anyone." : "";
+  return `Regarded as ${s} ${d}.${t}`;
+}
 function makeProspect(){
   const pos=wpick(CLASS_POS);
   const age=wpick([[21,26],[22,46],[23,24],[24,4]]);
-  // raw talent distribution — thin at the top
-  let cur=c99(gauss(63,7.5));
-  if(chance(.06)) cur=c99(gauss(74,4));
+  const off=classOffset(), sh=classShape();
+  // raw talent distribution — thin at the top, and shaped by the year
+  let cur=c99(gauss(63+off+sh.strong, 7.5*sh.depth));
+  if(chance(.06*sh.top)) cur=c99(gauss(74+off+sh.strong, 4));
   const gapRoll=Math.max(0,gauss(9,6.5)) + (age<=21?3:0);
   const p=makePlayer(pos,cur,age,{exp:0,potGap:gapRoll,spread:7.5});
   p.isProspect=true;
@@ -1936,6 +2104,7 @@ function repriceBoard(useCombine){
 
 /* ---------- class + scouting state ---------- */
 function generateDraftClass(){
+  rollClassShape();
   S.prospects=[];
   const n=278;
   for(let i=0;i<n;i++){
@@ -2123,7 +2292,9 @@ function makeDraftPick(pickObj,pid){
   p.draft.pickedSlot=pickObj.slot;
   p.draft.pickedBy=t.id;
   p.draft.pickedYear=S.year+1;
-  signPlayer(p,t.id,rookieAPY(pickObj.overall-1),pickObj.round<=2?4:3,.6);
+  signPlayer(p,t.id,rookieAPY(pickObj.overall-1),ROOKIE_YEARS,pickObj.round===1?1:0.6);
+  p.rookieDeal=true;
+  if(pickObj.round===FIFTH_YEAR_ROUND) p.fifthYear={available:true, from:S.year+ROOKIE_YEARS};
   addToTeam(p,t);
   S.prospects=S.prospects.filter(x=>x!==pid);
   if(t.id===S.userTeam) news(`Drafted ${p.pos} ${p.f} ${p.l}, ${p.draft.ctx.school} — round ${pickObj.round}, pick ${pickObj.slot}`,"draft",p.id);
@@ -2167,7 +2338,7 @@ function udfaSigning(){
     const teams=S.teams.filter(t=>t.roster.length<ROSTER_MAX+16&&capSpace(t)>MIN_SALARY*2);
     if(!teams.length||chance(.25)){ S.freeAgents.push(p.id); continue; }
     const t=teams.sort((a,b)=>needScore(b,p.pos)-needScore(a,p.pos))[Math.floor(rnd()*3)]||teams[0];
-    signPlayer(p,t.id,minSalary(),2,.05); addToTeam(p,t);
+    signPlayer(p,t.id,minSalaryFor(p),3,.02); p.rookieDeal=true; addToTeam(p,t);
   }
   S.prospects=[];
 }
@@ -2546,8 +2717,10 @@ const SCREENS_TEAM=function(){
         <td class="click" data-act="player" data-arg="${p.id}">
           <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
             :p.holdout?' <span class="tag warn">held out</span>':""}
-          <div class="tiny dim">${esc(p.f)} · ${p.age} · ${fitWord(schemeFit(p))}</div></td>
-        <td class="n ovrcell">${p.ovr}</td>
+          ${p.pos!==pos?` <span class="tag">${p.pos}</span>`:""}
+          <div class="tiny dim">${esc(p.f)} · ${p.age} · ${p.pos!==pos
+            ? "out of position" : fitWord(schemeFit(p))}</div></td>
+        <td class="n ovrcell ${p.pos!==pos?"warn":""}">${ovrAt(p,pos)}</td>
         <td style="width:52px">${own&&i>0?`<button class="mini" data-act="promote" data-arg="${pos}" data-arg2="${p.id}">▲</button>`:""}</td>
       </tr>`).join("");
       return `<div class="depthgrp"><div class="row spread depthhead">
@@ -2790,7 +2963,9 @@ const SCREENS_SCOUT=function(){
       <td class="n">${known&&Math.abs(gap)>=3?`<span class="tag ${gap>0?"gold":"red"}">${gap>0?"+":""}${Math.round(gap)}</span>`:""}
         <div class="meter" style="margin-top:4px"><i style="width:${Math.round(r.k)}%"></i></div></td>
     </tr>`;}).join("");
-  return collegeMapPanel()
+  return `<div class="panel"><div class="pb tight">
+      <p class="small"><b>The ${S.year+1} class.</b> ${esc(classWord())}</p></div></div>`
+    + collegeMapPanel()
     + `<div class="panel">
     <div class="ph"><h2>Scouting</h2><span class="sub">${Math.round(t.scoutPts)} hours left</span></div>
     <div class="pb stack">
@@ -2947,6 +3122,8 @@ function playerSheet(pid){
     ${p.injury>0?`<div class="panel"><div class="pb"><span class="tag red">Out ${p.injury} weeks</span>
       <span class="small"> ${esc(p.injDesc)}</span></div></div>`:""}
     <div class="panel"><div class="ph"><h3>Attributes</h3></div><div class="pb stack">${attrs}</div></div>
+    ${(()=>{ const ct=contractTable(p); return ct?`<div class="panel">${ct}</div>`:""; })()}
+    ${confidenceLine(p)}
     ${numbers?`<div class="panel"><div class="ph"><h3>Production</h3>
       <span class="sub">${(p.seasonLog||[]).length+((p.stats&&p.stats.gp)?1:0)} season${
         ((p.seasonLog||[]).length+((p.stats&&p.stats.gp)?1:0))===1?"":"s"}</span></div>
@@ -2992,6 +3169,13 @@ function playerSheet(pid){
         </div></div>`;})()}
     ${p.contract?`<div class="pb tight"><p class="tiny dim">${structureLabel(p)} ·
       ${fmtM(deadMoney(p))} dead if released${p.tagged===S.year?" · franchise tagged":""}</p></div>`:""}
+    ${(()=>{ const alt=bestOtherSpots(p,3).filter(x=>x.ovr>=Math.max(45,p.ovr-22));
+      if(!alt.length) return "";
+      return `<div class="pb tight"><div class="small" style="margin-bottom:4px">Elsewhere on the field</div>
+        <table class="stat"><tbody>${alt.map(x=>`<tr>
+          <td>${posTag(x.pos)} ${POSNAME[x.pos]||x.pos}</td>
+          <td class="dim">${x.d<=1?"a natural move":x.d<=2?"could learn it":"out of his depth"}</td>
+          <td class="big">${x.ovr}</td></tr>`).join("")}</tbody></table></div>`;})()}
     ${percentileLine(p)}
     ${own?`<div class="row wrap">
       ${p.contract&&p.contract.left<=1?`<button class="btn" data-act="extend" data-arg="${pid}">Offer extension</button>`:""}
@@ -3199,6 +3383,7 @@ const SCREENS_OFFICE=function(){
       <label class="btn full" style="display:block;text-align:center">Import save file
         <input type="file" id="importer" accept=".json" style="display:none"></label>
       <hr class="rule">
+      <button class="btn full" data-act="rosterload">Load a real roster</button>
       <button class="btn full danger" data-act="newleague">Start a new league</button>
       ${slotsPanel()}
       <p class="tiny dim">Saves live in this browser. Download a file if you want to keep it forever
@@ -3377,6 +3562,7 @@ const ACT={
   },
   menuslots:()=>{ openSheet(menuSlotSheet()); },
   menuguide:()=>{ openSheet(menuGuideSheet()); },
+  rosterload:()=>{ openSheet(rosterSheet()); },
   autotoggle:k=>{
     if(!S.auto) S.auto={depth:true,ir:true,squad:true,cuts:true};
     S.auto[k]=!autoOn(k);
@@ -3455,6 +3641,7 @@ document.addEventListener("change",e=>{
   const fn=ACT[el.dataset.act];
   if(fn) fn(el.dataset.arg,el.dataset.arg2,e);
   if(e.target.id==="importer") importSave(e.target.files[0]);
+  if(e.target.id==="rosterfile") importRoster(e.target.files[0]);
 });
 /* ============================================================
    Module 8: the calendar — phases, combine, saves, boot
@@ -3527,8 +3714,32 @@ function offseasonProgressReport(rooks){
 }
 
 /* ---------- housekeeping ---------- */
+/* nobody takes the field a man short at a position, whatever the roster count */
+function coverAllPositions(t){
+  let fixed=0;
+  for(const pos of POS){
+    if(t.roster.some(id=>S.players[id]&&S.players[id].pos===pos)) continue;
+    // make room by dropping the least useful man at an overstocked spot
+    if(t.roster.length>=ROSTER_MAX){
+      const surplus=t.roster.map(id=>S.players[id]).filter(p=>p&&!p.pinActive)
+        .filter(p=>t.roster.filter(id=>S.players[id].pos===p.pos).length>(ROSTER_NEED[p.pos]||1))
+        .sort((a,b)=>playerTradeValue(a)-playerTradeValue(b))[0];
+      if(surplus) releasePlayer(surplus,t); else break;
+    }
+    const pool=S.freeAgents.map(id=>S.players[id])
+      .filter(p=>p&&!p.retired&&p.teamId===null&&p.pos===pos).sort((a,b)=>b.ovr-a.ovr);
+    let p=pool[0];
+    if(!p){ p=makePlayer(pos,c99(gauss(57,4)),ri(23,27)); S.players[p.id]=p; }
+    else S.freeAgents=S.freeAgents.filter(id=>id!==p.id);
+    signPlayer(p,t.id,minSalaryFor(p),1,.1);
+    addToTeam(p,t);
+    fixed++;
+  }
+  return fixed;
+}
 function fillRosterFromFA(t,quiet){
   let added=0, guard=0;
+  added+=coverAllPositions(t);
   while(t.roster.length<ROSTER_MAX&&guard++<90){
     const need=teamNeeds(t)[0];
     const pool=S.freeAgents.map(id=>S.players[id])
@@ -3640,9 +3851,13 @@ function startSeason(){
   buildSchedule();
   generateDraftClass();
   S.week=1; S.phase="regular";
-  S.cap=Math.round(S.cap*1.062);
+  const wasCap=S.cap;
+  S.cap=Math.round(S.cap*capGrowth());
+  news(`The salary cap is set at ${fmtM(S.cap)} — ${S.capNote}, `+
+       `${S.cap>=wasCap?"a rise of":"a fall of"} ${fmtM(Math.abs(S.cap-wasCap))}.`,"league");
   runAutoCuts();
   for(const t of S.teams){ t.scoutPts=0; fillRosterFromFA(t,t.id!==S.userTeam); assignSchemes(t); }
+  for(const t of S.teams) coverAllPositions(t);
   aiStockPracticeSquads();
   enforceCapFloor();
   enforceCap();
@@ -3659,6 +3874,7 @@ function advance(){
     case "regular":
       if(S.week<=WEEKS){ tickHoldouts(); playWeek(); grantScoutPts(); aiManageIR(); psDevelop(); poachPracticeSquads(); }
       runAutoJobs();
+      ownerInSeason();
       buildDigest();
       if(GAMEPLANS[planOf()]&&GAMEPLANS[planOf()].heals)
         for(const id of t.roster){ const p=S.players[id]; if(p&&p.injury>0&&chance(.35)) p.injury--; }
@@ -3708,6 +3924,7 @@ function advance(){
       break;}
     case "resign":
       aiUseTags();
+      runCombine();          // late February, weeks before anybody can be signed
       S.phase="freeagency";
       break;
     case "freeagency":
@@ -3717,7 +3934,6 @@ function advance(){
       enforceCap();
       runFreeAgency(3);   // whoever the purge put on the street gets another market
       S.userOffers={};
-      runCombine();
       generateRumors();
       S.phase="predraft"; S.predraftWeek=1;
       t.scoutPts+=Math.round(scoutBudget(t)*2.4);
@@ -3816,6 +4032,7 @@ function migrateSave(){
     if(!c.hidden||c.hidden.pot===undefined) rollCoachPotential(c);
     if(c.value===undefined) c.value=coachValue(c);
   }
+  if(S.owner&&!S.owner.traits) initOwnerTraits(S.owner);
   if(!S.schoolW) initSchoolWeights();
   if(!S.tagUsed) S.tagUsed={};
   if(!S.gameplan) S.gameplan="balanced";
@@ -3849,9 +4066,36 @@ function exportSave(){
 function importSave(file){
   if(!file) return;
   const fr=new FileReader();
-  fr.onload=()=>{ try{ S=JSON.parse(fr.result); render(); toast("League loaded."); }
-                  catch(e){ toast("That file didn't parse."); } };
+  fr.onload=()=>{
+    let doc=null;
+    try{ doc=JSON.parse(fr.result); }catch(e){ toast("That file didn't parse."); return; }
+    // the same picker takes a saved league or a roster; tell them apart
+    if(doc&&doc.format==="front-office-roster/1"){ finishRoster(doc); return; }
+    S=doc; migrateSave(); V.screen="hub"; render(); toast("League loaded.");
+  };
   fr.readAsText(file);
+}
+function importRoster(file){
+  if(!file) return;
+  const fr=new FileReader();
+  fr.onload=()=>{
+    let doc=null;
+    try{ doc=JSON.parse(fr.result); }catch(e){ toast("That file didn't parse."); return; }
+    finishRoster(doc);
+  };
+  fr.readAsText(file);
+}
+function finishRoster(doc){
+  // a roster replaces every squad, so start from a clean league of the chosen shape
+  const setup=Object.assign({},SETUP_DEFAULTS,V.setup||{},{mode:"real"});
+  V.setup=setup;
+  newGame(S&&S.teams?S.userTeam:0, Math.floor(Math.random()*1e9));
+  const bad=applyRoster(doc);
+  if(bad){ toast(bad); return; }
+  closeSheet();
+  V.screen="hub";
+  render();
+  toast(`${doc.count||doc.players.length} real players loaded.`);
 }
 
 /* ---------- boot ---------- */
@@ -3964,6 +4208,31 @@ async function boot(){
   setInterval(()=>{ if(S&&S.teams&&S.teams.length) saveGame(); },30000);
   window.addEventListener("beforeunload",()=>{ try{ saveGame(true); }catch(e){} });
 }
+
+/* ---------- what the cap does next ---------- */
+function capGrowth(){
+  // a shock is repaid over the following seasons, as the league has done before
+  if(S.capRepay>0){
+    S.capRepay--;
+    const r=1+rf(0.10,0.135);
+    S.capNote=`up sharply again as the league makes up lost ground`;
+    return r;
+  }
+  if(chance(0.038)){                       // something goes badly wrong
+    S.capRepay=ri(2,3);
+    const r=1-rf(0.05,0.11);
+    S.capNote=`down for the first time in years — the league has taken a hit`;
+    return r;
+  }
+  if(chance(0.13)){                        // the television money is renegotiated
+    const r=1+rf(0.115,0.145);
+    S.capNote=`up steeply on the back of a new television deal`;
+    return r;
+  }
+  const r=1+clamp(gauss(0.065,0.023),0.015,0.11);
+  S.capNote=r>=1.085?`up strongly`:r<=1.045?`up only a little`:`up as usual`;
+  return r;
+}
 /* ============================================================
    Module 9: running the business — money, facilities, staff,
    the trade market, and the long memory of a draft board
@@ -4062,13 +4331,15 @@ function settleBooks(){
     if(t.cash<0){
       const covered=-t.cash;
       t.cash=0;
+      t.hadShortfall=true;
       if(t.id===S.userTeam&&S.owner){
         const hit=clamp(Math.round(covered/(S.cap*0.06)),1,14);
         S.owner.patience=clamp(S.owner.patience-hit,0,100);
         news(`The owner had to put ${fmtM(covered)} in to cover the shortfall. He noticed.`,"loss");
       }
     }
-    const reserve=Math.round(400e6*capScale());   // room to save for a real project
+    const reserve=Math.round(400e6*capScale()*
+      (t.id===S.userTeam&&typeof ownerPurseMult==="function"?ownerPurseMult():1));
     if(t.cash>reserve){
       const draw=Math.round((t.cash-reserve)*0.45);
       t.cash-=draw;
@@ -4950,6 +5221,7 @@ const MANDATES={
 function initOwner(){
   const k=pick(Object.keys(MANDATES));
   S.owner={mandate:k, patience:64, years:0, grace:2, history:[], fired:false};
+  initOwnerTraits(S.owner);
 }
 function ownerName(){ return (MANDATES[S.owner.mandate]||MANDATES.playoffs).name; }
 function ownerVerdict(){
@@ -4963,16 +5235,20 @@ function ownerReview(){
   if(!S.owner) initOwner();
   if(S.owner.fired) return;
   const t=S.teams[S.userTeam];
-  const delta=ownerVerdict();
+  const delta=ownerTemperMult(ownerVerdict());
   S.owner.patience=clamp(S.owner.patience+delta,0,100);
   S.owner.years++;
-  S.owner.history.unshift({year:S.year,w:t.w,l:t.l,delta,patience:S.owner.patience});
+  S.owner.history.unshift({year:S.year,w:t.w,l:t.l,delta,patience:S.owner.patience,
+    champ:S.champion===t.id, playoffs:!!t.madePlayoffs, shortfall:!!t.hadShortfall});
+  t.hadShortfall=false;
+  evolveMandate();
+  driftOwnerTraits();
   if(S.owner.history.length>15) S.owner.history.length=15;
   const mood = S.owner.patience>=75?"delighted":S.owner.patience>=55?"satisfied"
              : S.owner.patience>=35?"restless":S.owner.patience>=18?"openly unhappy":"finished with you";
   news(`The owner is ${mood} after ${t.w}-${t.l}. ${delta>=0?"+":""}${delta} on your standing with him.`,
        delta>=0?"info":"loss");
-  if(S.owner.patience<=0){
+  if(S.owner.patience<=Math.max(0,-ownerRope())){
     S.owner.fired=true;
     if(S.career){ S.career.firedFrom=S.career.firedFrom||[];
       S.career.firedFrom.push({club:t.city+" "+t.name,year:S.year}); }
@@ -5078,6 +5354,186 @@ function lifeSeasonEnd(){
   for(const id in S.players){
     const p=S.players[id];
     if(p&&p.teamId!==null){ p.peakOvr=Math.max(p.peakOvr||0,p.ovr); p.tenure=(p.tenure||0)+1; }
+  }
+}
+
+/* ============================================================
+   An owner changes his mind, and tells you why
+   ============================================================ */
+function ownerHistoryRun(n,test){
+  const h=(S.owner.history||[]).slice(0,n);
+  return h.length>=n && h.every(test);
+}
+function evolveMandate(){
+  const o=S.owner, t=S.teams[S.userTeam];
+  if(!o||o.fired) return;
+  o.years=(o.years||0)+1;
+  const cur=o.mandate;
+  const h=o.history||[];
+  const last=h[0]||{};
+  const titles=h.filter(x=>x.champ).length;
+  const young=t.roster.map(id=>S.players[id]).filter(p=>p&&p.age<=25&&p.ovr>=76).length;
+  const cash=t.cash||0;
+  const broke=h.slice(0,2).filter(x=>x.shortfall).length;
+  let next=cur, why=null;
+
+  // he got what he asked for
+  if(cur==="winnow"&&last.champ){
+    next="build";
+    why="We did it. Now I don't want a five-year hole afterwards — keep this thing going.";
+  } else if(cur==="playoffs"&&last.champ){
+    next="winnow";
+    why="I asked for January and you gave me a parade. Do it again.";
+  }
+  // he has stopped believing in the short term
+  else if((cur==="winnow"||cur==="playoffs")&&ownerHistoryRun(3,x=>!x.playoffs&&x.w<=7)){
+    next="build";
+    why="Three years of this. I'm done pretending we're close — tear it down and do it properly.";
+  }
+  // the young roster he asked for has arrived
+  else if(cur==="build"&&young>=4&&last.w>=9){
+    next="winnow";
+    why="That's the team I wanted. I'm not waiting any longer — go and win with it.";
+  } else if(cur==="build"&&young>=3&&ownerHistoryRun(2,x=>x.w>=8)){
+    next="playoffs";
+    why="They're good enough now. I want to see them in January.";
+  }
+  // the money got his attention
+  else if(cur!=="frugal"&&broke>=2){
+    next="frugal";
+    why="I've covered this club's bills twice. That stops now — win, but win cheaply.";
+  }
+  // or stopped being a worry
+  else if(cur==="frugal"&&cash>S.cap*1.1&&ownerHistoryRun(2,x=>x.w>=9)){
+    next="playoffs";
+    why="The books are healthy and the team's close. Spend what you need to.";
+  }
+  // he's been at it a long time and wants one before he's finished
+  else if(cur!=="winnow"&&(o.years||0)>=8&&titles===0&&last.w>=9){
+    next="winnow";
+    why="I've owned this club a long time and never held that trophy. I'd like to, while I can.";
+  }
+
+  if(next!==cur&&MANDATES[next]){
+    o.mandate=next;
+    o.grace=Math.max(o.grace||0,1);      // a new brief comes with a little room
+    o.changed=S.year;
+    news(`The owner has changed what he wants: ${MANDATES[next].name}. "${why}"`,"info");
+  }
+}
+
+/* ============================================================
+   The man himself — and how the years change him
+   ============================================================ */
+const OWNER_TRAITS={
+  patienceTrait:{name:"Patience",   low:"itchy trigger finger", high:"lets you work"},
+  purse:        {name:"The purse",  low:"tight",                high:"open"},
+  temper:       {name:"Temper",     low:"even",                 high:"volatile"}
+};
+function initOwnerTraits(o){
+  o.traits={
+    patienceTrait: c99(gauss(52,16)),
+    purse:         c99(gauss(52,16)),
+    temper:        c99(gauss(50,17))
+  };
+  o.base=Object.assign({},o.traits);   // the man he fundamentally is
+}
+function trait(k){
+  const o=S.owner;
+  if(!o) return 50;
+  if(!o.traits) initOwnerTraits(o);
+  return o.traits[k];
+}
+/* what the traits actually do */
+function ownerRope(){        return Math.round((trait("patienceTrait")-50)*0.30); }  // firing threshold
+function ownerPurseMult(){   return 0.72 + trait("purse")/100*0.78; }                // cash he leaves you
+function ownerTemperMult(d){
+  if(d>=0) return d;
+  const sharp = 0.72 + trait("temper")/100*0.62;          // how hard he takes it
+  const cushion = 1.28 - trait("patienceTrait")/100*0.56; // how long he'll wear it
+  return Math.round(d*sharp*cushion);
+}
+function traitWord(k){
+  const v=trait(k), t=OWNER_TRAITS[k];
+  return v>=72?t.high : v>=45?"about average" : t.low;
+}
+/* a man is shaped by what happens to him */
+function driftOwnerTraits(){
+  const o=S.owner, t=S.teams[S.userTeam];
+  if(!o) return;
+  if(!o.traits) initOwnerTraits(o);
+  const h=o.history||[], last=h[0]||{};
+  const good=h.slice(0,3).filter(x=>x.playoffs).length;
+  const bad=h.slice(0,3).filter(x=>!x.playoffs&&x.w<=7).length;
+  const before=Object.assign({},o.traits);
+  const T=o.traits;
+
+  // winning mellows a man; losing wears him down
+  if(last.champ){ T.patienceTrait+=6; T.purse+=5; T.temper-=4; }
+  else if(good>=2){ T.patienceTrait+=2.5; T.temper-=1.5; }
+  if(bad>=2){ T.patienceTrait-=4; T.temper+=3.5; }
+  else if(last.w<=5){ T.patienceTrait-=1.5; T.temper+=1.5; }
+
+  // money talks
+  if(last.shortfall){ T.purse-=7; T.temper+=2; }
+  else if((t.cash||0)>S.cap*1.2){ T.purse+=2.5; }
+  else if((t.cash||0)<S.cap*0.15){ T.purse-=2; }
+
+  // and a long relationship with the same man softens him
+  if((o.years||0)>=6) T.patienceTrait+=1.2;
+
+  // he bends, but he doesn't become somebody else
+  if(!o.base) o.base=Object.assign({},T);
+  for(const k in T) T[k]=clamp(Math.round(T[k]+(o.base[k]-T[k])*0.16),12,90);
+  // tell him when something in him has really moved
+  for(const k in T){
+    if(Math.abs(T[k]-before[k])>=5){
+      const up=T[k]>before[k];
+      const line={
+        patienceTrait: up?"seems willing to let this play out":"is not waiting around any more",
+        purse:         up?"has opened his wallet":"has gone quiet about money",
+        temper:        up?"is quicker to anger than he was":"has calmed down"
+      }[k];
+      news(`The owner ${line}.`, up?"info":"loss");
+    }
+  }
+}
+
+/* ============================================================
+   A volatile owner doesn't wait for the review
+   ============================================================ */
+function ownerInSeason(){
+  const o=S.owner, t=S.teams[S.userTeam];
+  if(!o||o.fired||S.phase!=="regular") return;
+  const vol=trait("temper");
+  if(vol<58) return;                       // an even man keeps his counsel
+  const games=S.schedule.filter(g=>g.played&&(g.home===t.id||g.away===t.id))
+    .sort((a,b)=>b.week-a.week);
+  if(games.length<3) return;
+  const res=games.map(g=>{
+    const us=g.home===t.id?g.hs:g.as, them=g.home===t.id?g.as:g.hs;
+    return {won:us>them, margin:us-them};
+  });
+  const heat=(vol-58)/42;                  // how far past even he is
+  const say=(txt,hit,kind)=>{
+    o.patience=clamp(o.patience+hit,0,100);
+    o.spoke=S.week;
+    news(txt,kind);
+  };
+  if((o.spoke||-9)>=S.week-2) return;      // he isn't on the phone every week
+
+  if(!res[0].won&&!res[1].won&&!res[2].won){
+    say(`The owner has been talking to reporters about "accountability" after a third straight defeat.`,
+        -Math.round(3+heat*7),"loss");
+  } else if(!res[0].won&&res[0].margin<=-21){
+    say(`The owner was seen leaving before the end. He hasn't called.`,
+        -Math.round(2+heat*5),"loss");
+  } else if(res[0].won&&res[1].won&&res[2].won){
+    say(`The owner has been telling anyone who'll listen that he backed you all along.`,
+        Math.round(2+heat*5),"win");
+  } else if(res[0].won&&res[0].margin>=21){
+    say(`The owner called after that one. He was still shouting.`,
+        Math.round(1+heat*3),"win");
   }
 }
 /* ============================================================
@@ -5391,6 +5847,11 @@ const SCREENS_OWNER=function(){
         <span class="tiny dim">${!o.tenure?"newly in charge"
           :o.tenure===1?"a year in charge":`${o.tenure} years in charge`}</span></div>
       <div class="callout ${tone}"><b>${esc(m.name)}</b> — ${esc(m.blurb)}</div>
+      <div class="pb tight"><table class="stat"><tbody>${Object.keys(OWNER_TRAITS).map(k=>`<tr>
+        <td>${OWNER_TRAITS[k].name}</td><td class="dim">${esc(traitWord(k))}</td></tr>`).join("")}
+      </tbody></table></div>
+      ${o.changed?`<p class="tiny dim">He settled on this in ${o.changed}${
+        o.changed===S.year?" — you have a year to show him something":""}.</p>`:""}
       <div class="row spread"><span class="small">Standing with the owner</span>
         <span class="small"><b>${pct>=75?"delighted":pct>=55?"satisfied":pct>=35?"restless"
           :pct>=18?"openly unhappy":"finished with you"}</b></span></div>
@@ -5881,6 +6342,15 @@ function ownerTenureRoll(){
     S.owner.patience=clamp(ri(42,66),20,90);
   }
   t.ownerName=name;
+  // and his own temperament: family resembles family, a buyer is a stranger
+  const old=S.owner.traits||{};
+  initOwnerTraits(S.owner);
+  if(kind==="family"){
+    for(const k in S.owner.traits)
+      S.owner.traits[k]=clamp(Math.round((old[k]||50)*0.55+S.owner.traits[k]*0.45),12,90);
+    S.owner.base=Object.assign({},S.owner.traits);
+  }
+  S.owner.years=0; S.owner.changed=null;
   // a new owner brings his own idea of what this is for
   const keys=Object.keys(MANDATES).filter(k=>k!==oldMandate);
   S.owner.mandate = chance(kind==="family"?0.45:0.80) ? pick(keys) : oldMandate;
@@ -5888,6 +6358,7 @@ function ownerTenureRoll(){
   S.owner.tenure=0;
   const m=MANDATES[S.owner.mandate];
   news(`${blurb} His brief: "${m.blurb}"`,"info");
+  raiseMoment(kind==="family"?"":"win", "The club changes hands", name, blurb);
 }
 /* AI clubs change hands too, quietly */
 function aiOwnerChurn(){
@@ -6348,15 +6819,17 @@ function careerPanel(){
    prorated across the term; base salary is what you can actually get off
    the books. Cutting a man accelerates every unpaid dollar of bonus.     */
 const PRORATE_MAX=5;
-function contractHits(apy,years,bonusPct){
+function contractHits(apy,years,bonusPct,floor){
   const total=apy*years;
   const bonus=Math.round(total*bonusPct);
-  const prorate=Math.round(bonus/Math.min(years,PRORATE_MAX));
+  // signing bonus spreads over the deal, but never more than five years
+  const spread=Math.min(years,PRORATE_MAX);
+  const prorate=Math.round(bonus/spread);
+  const low=floor||minSalary();
   const hits=[];
   for(let y=0;y<years;y++){
-    const pr = y<Math.min(years,PRORATE_MAX) ? prorate : 0;
-    hits.push(Math.max(minSalary(), apy));
-    hits[y]={hit:Math.max(minSalary(),apy), prorate:pr, base:Math.max(0,apy-pr)};
+    const pr = y<spread ? prorate : 0;
+    hits[y]={hit:Math.max(low,apy), prorate:pr, base:Math.max(0,apy-pr)};
   }
   return {bonus,prorate,hits};
 }
@@ -6380,6 +6853,8 @@ function yearIndex(p){
 }
 function capHit(p){
   if(!p.contract) return 0;
+  const v=typeof vsbHit==="function"?vsbHit(p):null;
+  if(v!==null) return v;
   const h=p.contract.hits;
   if(!h||!h.length) return p.contract.apy;
   return h[clamp(yearIndex(p),0,h.length-1)].hit;
@@ -6463,7 +6938,7 @@ function extendPlayer(p,team,generous){
   if(capSpace(t)-apy+capHit(p)<0) return false;
   const share=clamp(apy/(S.cap*0.11),0,1);
   const bonusPct=clamp(0.06+share*0.58,0.06,0.64);
-  const st=contractHits(apy,yrs,bonusPct);
+  const st=contractHits(apy,yrs,bonusPct,minSalaryFor(p));
   p.contract={apy,years:yrs,left:yrs,signedYear:S.year,bonus:st.bonus,
               prorate:st.prorate,hits:st.hits,gtdYears:Math.min(yrs,p.ovr>=82?3:2)};
   p.holdout=false;
@@ -6545,12 +7020,14 @@ function compPickValue(p){
 }
 /* the cap is a hard ceiling — a club that ends the offseason over it has to
    get compliant, by restructuring first and then by releasing */
-function enforceCap(only){
+function enforceCap(only,opts){
+  const spare=opts&&opts.spareReal;
   for(const t of (only?[only]:S.teams)){
     let guard=0;
     while(capSpace(t)<0&&guard++<60){
       const roster=t.roster.map(id=>S.players[id]).filter(p=>p&&p.contract);
-      const restr=roster.filter(canRestructure).sort((a,b)=>capHit(b)-capHit(a))[0];
+      const restr=roster.filter(p=>canRestructure(p)&&!(spare&&p.contract&&p.contract.real))
+        .sort((a,b)=>capHit(b)-capHit(a))[0];
       if(restr&&restructure(restr)>0) continue;
       const cut=roster
         .filter(p=>capHit(p)-deadMoney(p)>0)
@@ -7184,6 +7661,10 @@ function recapPanel(){
 }
 
 /* ---------- ratings in context ---------- */
+function ratingSpread(p){
+  const v=p.ratingConfidence;
+  return v===undefined ? 1 : clamp(1.9-v/100*1.1, 0.8, 1.9);
+}
 function posPercentile(p){
   const peers=S.teams.flatMap(t=>t.roster.map(id=>S.players[id]))
     .filter(x=>x&&x.pos===p.pos);
@@ -7784,6 +8265,7 @@ function menuScreen(){
         <span class="sub2">${slots} slot${slots===1?"":"s"} in use</span></button>`:""}
       <label class="btn full" style="display:block;text-align:center">Open a save file
         <input type="file" id="importer" accept=".json" style="display:none"></label>
+      <button class="btn full" data-act="rosterload">Load a real roster</button>
       <button class="btn full" data-act="menuguide">How this works</button>
     </div>
     <p class="menu-foot">Leagues are kept in this browser. Download a file to move one
@@ -7897,6 +8379,278 @@ function statHeadline(p){
   else { pick3.push([s.tkl||0,"Tackles"],[s.sak||0,"Sacks"],[s.int||0,"Picks"]); }
   return `<div class="pb grid3">${pick3.map(([v,l])=>
     `<div class="stat"><b class="midnum">${v}</b><span>${l}</span></div>`).join("")}</div>`;
+}
+
+/* ============================================================
+   Loading a real roster
+   ============================================================ */
+function applyRoster(doc){
+  if(!doc||doc.format!=="front-office-roster/1"||!Array.isArray(doc.players))
+    return "That isn't a roster file.";
+  const byAbbr={};
+  for(const t of S.teams) byAbbr[t.abbr]=t;
+  const groups={};
+  for(const r of doc.players){
+    if(!byAbbr[r.t]||!POS.includes(r.p)) continue;
+    (groups[r.t]=groups[r.t]||[]).push(r);
+  }
+  const placed=Object.keys(groups).length;
+  if(placed<20) return `Only ${placed} clubs matched. Is this for a different league?`;
+  normaliseRoster(groups);
+
+  // out with the invented men
+  for(const t of S.teams){
+    for(const id of t.roster.concat(t.ir||[],t.ps||[])){
+      const p=S.players[id]; if(p){ p.teamId=null; p.retired=true; }
+    }
+    t.roster=[]; t.ir=[]; t.ps=[]; t.depth={}; t.deadCap=0; t.deadCapNext=0;
+  }
+  let n=0;
+  const spare=[];
+  for(const abbr in groups){
+    const t=byAbbr[abbr];
+    // a camp roster has to be cut to 53 with a whole team left standing, so
+    // work down each position in turn rather than straight down the ratings
+    const rows=[];
+    const byPos={};
+    for(const r of groups[abbr]) (byPos[r.p]=byPos[r.p]||[]).push(r);
+    for(const pos in byPos) byPos[pos].sort((a,b)=>b.o-a.o);
+    for(const pos of POS){                       // everyone's starters first
+      const need=ROSTER_NEED[pos]||1;
+      for(let i=0;i<need&&byPos[pos]&&byPos[pos].length;i++) rows.push(byPos[pos].shift());
+    }
+    const rest=[];
+    for(const pos in byPos) rest.push(...byPos[pos]);
+    rest.sort((a,b)=>b.o-a.o);
+    const take=Math.max(0,ROSTER_MAX-rows.length);
+    rows.push(...rest.slice(0,take));
+    // everybody else is a real player too — the squad and the market, not waste
+    spare.push(...rest.slice(take));
+    for(const r of rows){
+      const p=buildRosterPlayer(r);
+      if(!p) continue;
+      S.players[p.id]=p;
+      if(!applyRealContract(p,t,r)){
+        const yrs=clamp(Math.round(1+ (p.ovr-58)/9 + rf(0,1.4)),1,6);
+        signPlayer(p, t.id, Number(r.contract_apy)||marketAPY(p), yrs,
+          Number(r.contract_guarantee_pct)||clamp(0.25+(p.ovr-70)/90,0.05,0.75));
+      }
+      addToTeam(p,t);
+      n++;
+    }
+    // then bring the wage bill inside the cap, keeping the shape of who earns what
+    // a real contract is a fact and is left alone; only invented ones are trimmed
+    const bill=payroll(t);
+    const room=S.cap*rf(0.86,0.96);
+    if(bill>room){
+      const fixed=t.roster.map(id=>S.players[id])
+        .filter(p=>p&&p.contract&&p.contract.real)
+        .reduce((a,p)=>a+capHit(p),0);
+      const flexible=Math.max(1,bill-fixed);
+      const k=clamp((room-fixed)/flexible,0.35,1);
+      for(const id of t.roster){
+        const p=S.players[id];
+        if(p&&p.contract&&!p.contract.real)
+          setAPY(p, Math.max(minSalaryFor(p), Math.round(p.contract.apy*k)));
+      }
+    }
+    autoDepth(t);
+    assignSchemes(t);
+  }
+  // the men who didn't make a 53 fill out the squads and the open market
+  let squadded=0, onMarket=0;
+  for(const r of spare){
+    const p=buildRosterPlayer(r);
+    if(!p) continue;
+    S.players[p.id]=p;
+    const home=byAbbr[r.t];
+    if(home&&(home.ps||[]).length<PS_SLOTS&&!canSignPS(home,p)){
+      signToPS(home,p); squadded++;
+    } else {
+      p.teamId=null; p.contract=null;
+      S.freeAgents.push(p.id); onMarket++;
+    }
+  }
+  if(squadded||onMarket)
+    news(`${squadded} more to practice squads, ${onMarket} onto the open market.`,"info");
+  enforceCap(null,{spareReal:true});
+  enforceCap();                       // whatever is still over gets the usual treatment
+  // the class on the board was drawn for the old league; draw it again for this one
+  S.classOffset=undefined;             // recalibrated once, to this league
+  if(S.prospects&&S.prospects.length){
+    for(const id of S.prospects) delete S.players[id];
+    generateDraftClass();
+  }
+  resetPosNorms(); resetAttrNorms();
+  for(const id in S.players) delete S.players[id]._syn;
+  S.realRoster=doc.count||n;
+  news(`${n} real players loaded across ${placed} clubs.`,"league");
+  return null;
+}
+function rosterSheet(){
+  return `<div class="sh"><div><h2>Load a roster</h2>
+      <div class="dim small">Real players, in place of the invented ones.</div></div>
+    <button class="x" data-act="closesheet">×</button></div>
+  <div class="sb">
+    ${S.realRoster?`<div class="callout green">A real roster is loaded — ${S.realRoster} players.</div>`:""}
+    <p class="small">The game ships with players of its own making. If you have a roster file,
+      load it here and it replaces every squad in the league. Contracts, ceilings and
+      depth charts are worked out from what's in the file.</p>
+    <label class="btn full primary" style="display:block;text-align:center">Choose a roster file
+      <input type="file" id="rosterfile" accept=".json" style="display:none"></label>
+    <p class="tiny dim">A roster file is JSON. There's a converter in the project that turns a
+      ratings spreadsheet into one. Loading a roster starts the league over with those players.</p>
+  </div>`;
+}
+
+/* ============================================================
+   What a real player has left in him
+   ============================================================
+   A roster file gives you what a man is today. His ceiling is the thing
+   nobody actually knows, so it is inferred and then deliberately blurred —
+   two identical profiles must not come out the same, or there is nothing
+   left to find out.                                                        */
+function rosterCeiling(p,row){
+  // if the file states one, it is somebody's judgement and we take it
+  if(row&&row.potential!==undefined&&Number(row.potential)>0)
+    return clamp(Math.round(Number(row.potential)),p.ovr,99);
+
+  const age=p.age, ovr=p.ovr;
+  // how much room the years leave him
+  let room = age<=21 ? 9
+           : age<=23 ? 7
+           : age<=25 ? 4.5
+           : age<=27 ? 2.6
+           : age<=29 ? 1.2
+           : age<=31 ? 0.5
+           : 0.2;
+  // the higher he already is, the less headroom there physically is
+  room *= clamp((99-ovr)/26, 0.12, 1);
+  // a man who reached the league late has more left than his age suggests
+  const lateStart=clamp((age-22)-(p.exp||0),0,4);
+  room *= 1 + lateStart*0.10;
+  // and the odd one still has a jump in him well past the usual age
+  if(chance(0.06)) room *= rf(1.8,2.8);
+  // blur it, so his ceiling is a thing to be discovered rather than worked out
+  room = Math.max(0, room + gauss(0, 2.6));
+  return clamp(Math.round(ovr+room), ovr, 99);
+}
+/* a contract lifted straight from the real thing, kept exactly as it is */
+function applyRealContract(p,t,row){
+  const d=row&&row.contract_detail;
+  if(!d||!Array.isArray(d.years)||!d.years.length) return false;
+  const hits=d.years.map(y=>({
+    year:Number(y.year), hit:Math.round(Number(y.hit||0)), base:Math.round(Number(y.base||0)),
+    prorate:Math.round(Number(y.prorate||0)), roster:Math.round(Number(y.roster||0)),
+    workout:Math.round(Number(y.workout||0)), option:Math.round(Number(y.option||0)),
+    guaranteed:Math.round(Number(y.guaranteed||0))
+  }));
+  const total=Number(row.contract_total_value||d.contract_total_value||row.contract_apy||0);
+  const apy=Number(row.contract_apy||(total/Math.max(1,hits.length)));
+  const gtd=Number(row.contract_total_guaranteed||d.contract_total_guaranteed||0);
+  p.teamId=t.id;
+  p.contract={
+    apy:Math.round(apy), years:hits.length, left:hits.length,
+    signedYear:Number(d.current_year||S.year),
+    gtd:Math.round(gtd), bonus:hits.reduce((n,h)=>n+h.prorate,0),
+    prorate:Math.round(hits[0]?hits[0].prorate:0), hits,
+    gtdYears:hits.filter(h=>h.guaranteed>0).length,
+    real:true, source:d.source||"Over The Cap", sourceUrl:d.url||row.otc_url||"",
+    totalValue:Math.round(total)
+  };
+  return true;
+}
+
+/* the real deal, set out year by year as it actually reads */
+function contractTable(p){
+  const c=p.contract;
+  if(!c||!c.real||!Array.isArray(c.hits)||!c.hits.length) return "";
+  const cols=[["base","Base"],["prorate","Bonus"],["roster","Roster"],
+              ["workout","Workout"],["option","Option"]];
+  const used=cols.filter(([k])=>c.hits.some(h=>(h[k]||0)>0));
+  const yi=yearIndex(p);
+  return `<div class="ph"><h3>Contract</h3>
+      <span class="sub">${fmtM(c.totalValue||c.apy*c.years)} over ${c.years} year${c.years===1?"":"s"}</span></div>
+    <div class="statwrap"><table class="stat"><thead><tr><th>Year</th>
+      ${used.map(x=>`<th>${x[1]}</th>`).join("")}<th>Cap hit</th><th>Gtd</th></tr></thead>
+      <tbody>${c.hits.map((h,i)=>`<tr class="${i===yi?"tot":""}">
+        <td>${h.year||S.year+i}</td>
+        ${used.map(x=>`<td>${h[x[0]]?fmtM(h[x[0]]):"—"}</td>`).join("")}
+        <td class="big">${fmtM(h.hit)}</td>
+        <td>${h.guaranteed?fmtM(h.guaranteed):"—"}</td></tr>`).join("")}
+      </tbody></table></div>
+    <div class="pb tight"><p class="tiny dim">
+      ${c.gtd?`${fmtM(c.gtd)} guaranteed. `:""}Figures from ${esc(c.source||"the real contract")}.
+      ${c.sourceUrl?"":""}</p></div>`;
+}
+/* how sure anyone is of what this man actually is */
+function confidenceLine(p){
+  const v=p.ratingConfidence;
+  if(v===undefined) return "";
+  const word=v>=80?"His level is well established."
+    :v>=60?"There's broad agreement on what he is."
+    :v>=40?"Opinions on him vary."
+    :"Nobody is very sure what they have here.";
+  return `<div class="pb tight"><p class="tiny dim">${word}</p></div>`;
+}
+
+/* one real player, built from his row in the file */
+function buildRosterPlayer(r){
+  if(!r||!POS.includes(r.p)) return null;
+  const realAge=clamp(Number(r.age!==undefined?r.age:(r.a!==undefined?r.a:25)),20,45);
+  const realExp=clamp(Number(r.e!==undefined?r.e:Math.max(0,realAge-22)),0,22);
+  const p=makePlayer(r.p, clamp(r.o,25,99), realAge, {exp:realExp, potGap:0});
+  p.f=r.f; p.l=r.l;
+  p.ovr=clamp(r.o,25,99);
+  p.exp=realExp;
+  p.ht=Number(r.h)||p.ht; p.wt=Number(r.w)||p.wt;
+  for(const k in r.r) if(ATTRS.includes(k)) p.a[k]=clamp(r.r[k],25,99);
+  p.hidden=p.hidden||{};
+  p.hidden.pot=rosterCeiling(p,r);
+  p.hidden.dev=devFromRoll(rnd());
+  if(r.rating_confidence!==undefined)
+    p.ratingConfidence=clamp(Number(r.rating_confidence),0,100);
+  if(r.c) p.college=r.c;
+  p.draft={archived:true, school:r.c||undefined, real:true};
+  p.isProspect=false;
+  return p;
+}
+
+/* ============================================================
+   Putting an imported roster on the league's own scale
+   ============================================================
+   A file can be rated on any scale its author liked. The game judges
+   everything against a league averaging LEAGUE_MEAN, so the whole set is
+   shifted and stretched onto that — order and spacing preserved, only the
+   scale changed. Attributes move with the rating so a man's worth at another
+   position stays honest.                                                  */
+function normaliseRoster(groups){
+  const rows=[];
+  for(const k in groups) rows.push(...groups[k]);
+  if(rows.length<200) return;
+  // judge the scale on the men who will actually make a roster, not the camp
+  const kept=[];
+  for(const k in groups)
+    kept.push(...groups[k].slice().sort((a,b)=>b.o-a.o).slice(0,ROSTER_MAX));
+  const o=kept.map(r=>Number(r.o)||0);
+  const mean=avg(o);
+  const sd=Math.sqrt(avg(o.map(v=>(v-mean)*(v-mean))))||1;
+  const k=clamp(LEAGUE_SD/sd,0.55,1.8);
+  // if it already sits on this scale, leave it alone
+  if(Math.abs(mean-LEAGUE_MEAN)<1.2&&Math.abs(k-1)<0.12) return;
+  for(const r of rows){
+    const was=Number(r.o)||0;
+    const now=clamp(Math.round(LEAGUE_MEAN+(was-mean)*k),25,99);
+    r._shift=now-was;
+    r.o=now;
+    if(r.potential!==undefined&&Number(r.potential)>0)
+      r.potential=clamp(Math.round(LEAGUE_MEAN+(Number(r.potential)-mean)*k),now,99);
+    // the attributes carry the same move, or he'd be misjudged everywhere else
+    if(r.r) for(const a in r.r) r.r[a]=clamp(Math.round(r.r[a]+r._shift),25,99);
+  }
+  const after=avg(rows.map(r=>r.o));
+  news(`Ratings normalised to the league scale — the file averaged `+
+       `${mean.toFixed(1)}, the league runs at ${after.toFixed(1)}.`,"info");
 }
 boot();
 </script>
