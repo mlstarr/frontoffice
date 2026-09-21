@@ -4067,10 +4067,11 @@ function sortState(key,defCol,defDir){
   if(!V.sorts[key]) V.sorts[key]={col:defCol||"", dir:defDir==="asc"?1:-1};
   return V.sorts[key];
 }
-function sortTH(key,col,label,cls,defDir){
+function sortTH(key,col,label,cls,defDir,title){
   const st=sortState(key);
   const on=st.col===col;
   return `<th class="${cls||""} sortable${on?" on":""}" data-act="sortcol"
+    ${title?`title="${esc(title)}"`:""}
     data-arg="${key}" data-arg2="${col}|${defDir||"desc"}">${label}<i class="ar">${
       on?(st.dir<0?"▼":"▲"):"·"}</i></th>`;
 }
@@ -4102,7 +4103,11 @@ function phaseLabel(){
 }
 
 /* ---------- shared bits ---------- */
-function posTag(pos){return `<span class="pos ${posClass(pos)}">${pos}</span>`;}
+const POS_FULLNAME={QB:"Quarterback",RB:"Running back",WR:"Wide receiver",TE:"Tight end",
+  LT:"Left tackle",LG:"Left guard",C:"Center",RG:"Right guard",RT:"Right tackle",
+  EDGE:"Edge rusher",DT:"Defensive tackle",LB:"Linebacker",CB:"Cornerback",S:"Safety",
+  K:"Kicker",P:"Punter"};
+function posTag(pos){return `<span class="pos ${posClass(pos)}" title="${esc(POS_FULLNAME[pos]||pos)}">${pos}</span>`;}
 function playerRow(p,extra){
   return `<tr class="click" data-act="player" data-arg="${p.id}">
     <td>${posTag(p.pos)}</td>
@@ -4500,8 +4505,8 @@ const SCREENS_TEAM=function(){
       </div></div>
       <div class="scroll"><table><thead><tr>
         ${sortTH("roster","pos","Pos")}${sortTH("roster","name","Player","","asc")}
-        ${sortTH("roster","age","Age","n")}${sortTH("roster","ovr","Ovr","n")}
-        ${sortTH("roster","cap","Cap","n")}${sortTH("roster","yrs","Yrs","n hide-sm")}</tr></thead>
+        ${sortTH("roster","age","Age","n")}${sortTH("roster","ovr","Ovr","n",null,"Overall rating")}
+        ${sortTH("roster","cap","Cap","n",null,"Cap hit this season")}${sortTH("roster","yrs","Yrs","n hide-sm",null,"Years left on contract")}</tr></thead>
       <tbody>${ps.map(p=>playerRow(p,
         `<td class="n">${p.contract?fmtM(p.contract.apy):"—"}</td>
          <td class="n hide-sm">${p.contract?p.contract.left:"—"}</td>`)).join("")}</tbody></table></div>
@@ -4617,9 +4622,9 @@ const SCREENS_LEAGUE=function(){
       <td class="n hide-sm">${t.pf}</td><td class="n hide-sm">${t.pa}</td>
       <td class="n ${t.pf-t.pa>=0?"":"warn"}">${t.pf-t.pa>=0?"+":""}${t.pf-t.pa}</td></tr>`;
     const head=key=>`<thead><tr>${sortTH(key,"name","Team","","asc")}
-      ${sortTH(key,"w","W","n")}${sortTH(key,"l","L","n")}${sortTH(key,"pct","Pct","n")}
-      ${sortTH(key,"pf","PF","n hide-sm")}${sortTH(key,"pa","PA","n hide-sm")}
-      ${sortTH(key,"diff","Diff","n")}</tr></thead>`;
+      ${sortTH(key,"w","W","n",null,"Wins")}${sortTH(key,"l","L","n",null,"Losses")}${sortTH(key,"pct","Pct","n",null,"Winning percentage")}
+      ${sortTH(key,"pf","PF","n hide-sm",null,"Points for (scored)")}${sortTH(key,"pa","PA","n hide-sm",null,"Points against (allowed)")}
+      ${sortTH(key,"diff","Diff","n",null,"Point differential (points for minus points against)")}</tr></thead>`;
     const getters={name:t=>t.city, w:t=>t.w, l:t=>t.l,
       pct:t=>t.w+t.l?t.w/(t.w+t.l):0, pf:t=>t.pf, pa:t=>t.pa, diff:t=>t.pf-t.pa};
     const chips=`<div class="pb"><div class="chips">${
@@ -4794,7 +4799,7 @@ const SCREENS_SCOUT=function(){
       <p class="small"><b>The ${S.year+1} class.</b> ${esc(classWord())}</p></div></div>`
     + collegeMapPanel()
     + `<div class="panel">
-    <div class="ph"><h2>Scouting</h2><span class="sub">${Math.round(t.scoutPts)} hours left</span></div>
+    <div class="ph"><h2>Scouting</h2><span class="sub">${Math.round(t.scoutPts)} hours banked · +${scoutBudget(t)}/week</span></div>
     <div class="pb small muted">Worth targeting: ${draftTargets(t,4).join(", ")} — current holes and starters on expiring deals.</div>
     <div class="pb stack">
       <div class="chips">${posFilters.map(p=>
@@ -5132,8 +5137,8 @@ function faPanel(compact){
       </div></div>
     <div class="scroll"><table><thead><tr>
       ${sortTH("fa","pos","Pos")}${sortTH("fa","name","Player","","asc")}
-      ${sortTH("fa","age","Age","n")}${sortTH("fa","ovr","Ovr","n")}
-      ${sortTH("fa","fit","Fit","n")}${sortTH("fa","ask","Asking","n")}<th></th></tr></thead><tbody>
+      ${sortTH("fa","age","Age","n")}${sortTH("fa","ovr","Ovr","n",null,"Overall rating")}
+      ${sortTH("fa","fit","Fit","n",null,"How well he fits a need on this roster")}${sortTH("fa","ask","Asking","n",null,"Asking price per year")}<th></th></tr></thead><tbody>
       ${pool.map(p=>{const o=S.userOffers[p.id]; const fit=Math.round(needScore(t,p.pos));
         return `<tr><td>${posTag(p.pos)}</td>
         <td class="click" data-act="player" data-arg="${p.id}">${esc(p.f[0])}. ${esc(p.l)}</td>
@@ -5169,7 +5174,7 @@ function predraftPanel(){
   return `<div class="panel"><div class="ph"><h3>Pre-draft</h3>
     <span class="sub">${left} window${left===1?"":"s"} to draft day</span></div>
     <div class="pb grid3">
-      <div class="stat"><b>${Math.round(t.scoutPts)}</b><span>Hours left</span></div>
+      <div class="stat"><b>${Math.round(t.scoutPts)}</b><span>Hours banked (+${scoutBudget(t)}/wk)</span></div>
       <div class="stat"><b>${scouted}</b><span>Evaluated</span></div>
       <div class="stat"><b>${risers}</b><span>Above the board</span></div>
     </div>
@@ -5206,8 +5211,8 @@ const SCREENS_OFFICE=function(){
       ${staffButtonsFor("office")}
       <div class="scroll"><table><thead><tr>
       ${sortTH("cap","pos","Pos")}${sortTH("cap","name","Player","","asc")}
-      ${sortTH("cap","age","Age","n")}${sortTH("cap","ovr","Ovr","n")}
-      ${sortTH("cap","hit","Cap hit","n")}${sortTH("cap","yrs","Yrs","n")}</tr></thead><tbody>${ps.map(p=>
+      ${sortTH("cap","age","Age","n")}${sortTH("cap","ovr","Ovr","n",null,"Overall rating")}
+      ${sortTH("cap","hit","Cap hit","n",null,"Cap hit this season")}${sortTH("cap","yrs","Yrs","n",null,"Years left on contract")}</tr></thead><tbody>${ps.map(p=>
       `<tr class="click" data-act="player" data-arg="${p.id}"><td>${posTag(p.pos)}</td>
        <td>${esc(p.l)}</td><td class="n">${p.age}</td><td class="n ovr">${p.ovr}</td>
        <td class="n">${fmtM(p.contract.apy)}</td>
@@ -5535,16 +5540,20 @@ const ACT={
     pool=pool.slice(0,20);
     if(!pool.length){toast("Nobody left to sweep.");return;}
     t.scoutPts-=45;
-    let flagged=0;
+    const flagged=[];
     for(const p of pool){
       const r=S.scout[p.id];
       let g=7*(0.6+sc.acc/150);
       if(sc.region&&sc.region===p.draft.ctx.region) g*=1.3;
       r.k=clamp(r.k+g,0,100);
       if(!r.scoutIds.includes(sc.id)) r.scoutIds.push(sc.id);
-      if(myGrade(p.id).est-p.draft.consensus>=6) flagged++;
+      // A sweep used to just count how many names looked interesting and
+      // throw the number away — the player had no way to know who, short of
+      // re-scanning the whole board by hand afterward.
+      if(myGrade(p.id).est-p.draft.consensus>=6) flagged.push(p);
     }
-    toast(`${sc.name} looked at ${pool.length} names${flagged?`; ${flagged} worth a second look`:""}.`);
+    const names=flagged.map(p=>`${p.pos} ${p.l}`);
+    toast(`${sc.name} looked at ${pool.length} names${flagged.length?`; worth another look: ${names.join(", ")}`:""}.`);
     render();
   },
   sim4:()=>{ for(let i=0;i<4&&S.phase==="regular"&&S.week<=WEEKS;i++) advance(); },
@@ -6457,7 +6466,12 @@ function coachOverall(c){
 function refreshStaffMarket(){
   S.staffMarket=[];
   for(const role of ["HC","OC","DC","SD"]){
-    const n=ri(3,5);
+    // 3-5 candidates per role, shared across all 32 teams, never replenished
+    // until next year's refresh, was running dry well before a season ended
+    // — a handful of AI hires and the pool for a role could hit zero. Not
+    // every extra name needs to be good; the point is having someone left
+    // to look at.
+    const n=ri(9,14);
     for(let i=0;i<n;i++){
       const c=makeCoach(role);
       if(TEAM_SCHEMES[role]) c.scheme=pick(Object.keys(TEAM_SCHEMES[role]));
@@ -6806,7 +6820,7 @@ const OFFICE_BODY={
       </div></div>`;
     };
     const market=applySort("staffmkt",(S.staffMarket||[]).slice(),{
-      role:c=>c.role, name:c=>c.name, ovr:c=>coachOverall(c),
+      role:c=>c.role, name:c=>c.name, ovr:c=>coachRead(c).est,
       dev:c=>c.dev, ask:c=>c.asking, gm:c=>c.gm, disc:c=>c.disc
     },"ovr");
     return `<div class="pb grid2">
@@ -6817,18 +6831,19 @@ const OFFICE_BODY={
       <div class="ph"><h3>On the market</h3><span class="sub">${market.length} available</span></div>
       ${market.length?`<div class="scroll"><table><thead><tr>
         ${sortTH("staffmkt","role","Role","","asc")}${sortTH("staffmkt","name","Name","","asc")}
-        ${sortTH("staffmkt","ovr","Ovr","n")}${sortTH("staffmkt","dev","Dev","n")}
-        ${sortTH("staffmkt","gm","Game","n")}<th>Scheme</th>
-        ${sortTH("staffmkt","ask","Asking","n")}<th></th></tr></thead>
-        <tbody>${market.map(c=>`<tr><td class="muted small">${c.role} <span class="dim">${c.age||"—"}</span></td>
+        ${sortTH("staffmkt","ovr","Ovr","n",null,"Projected rating — narrows with each interview")}${sortTH("staffmkt","dev","Dev","n",null,"Player development")}
+        ${sortTH("staffmkt","gm","Game","n",null,"Game management")}<th>Scheme</th>
+        ${sortTH("staffmkt","ask","Asking","n",null,"Asking salary per year")}<th></th></tr></thead>
+        <tbody>${market.map(c=>{const rd=coachRead(c);
+          return `<tr><td class="muted small">${c.role} <span class="dim">${c.age||"—"}</span></td>
           <td>${esc(c.name)}<div class="tiny dim">${esc(coachReputation(c))}${
             (c.interviews||0)?` · ${c.interviews} interview${c.interviews>1?"s":""}`:""}</div></td>
-          <td class="n ovr">${coachOverall(c)}</td><td class="n">${c.dev}</td>
+          <td class="n ovr">${Math.round(rd.est)}<div class="tiny dim">±${Math.round(rd.band)}</div></td><td class="n">${c.dev}</td>
           <td class="n">${c.gm}</td>
           <td class="small dim">${c.scheme&&TEAM_SCHEMES[c.role]?TEAM_SCHEMES[c.role][c.scheme].name:"—"}</td>
           <td class="n">${fmtM(c.asking)}</td>
           <td><button class="chip" data-act="hirecoach" data-arg="${c.id}">Hire</button>
-            ${(c.interviews||0)<3?`<button class="mini" data-act="interview" data-arg="${c.id}">Interview ${fmtM(interviewCost())}</button>`:""}</td></tr>`).join("")}
+            ${(c.interviews||0)<3?`<button class="mini" data-act="interview" data-arg="${c.id}">Interview ${fmtM(interviewCost())}</button>`:""}</td></tr>`;}).join("")}
         </tbody></table></div>`
         :`<p class="small dim">The market refreshes after the season.</p>`}
       <div class="ph"><h3>Scouts</h3></div>
