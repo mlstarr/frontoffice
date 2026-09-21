@@ -313,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--tea
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.03";
+const APP_VERSION = "0.07";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -1948,9 +1948,29 @@ function usageShares(t){
   const r1=healthyStarter(t,"RB",0),r2=healthyStarter(t,"RB",1),r3=healthyStarter(t,"RB",2);
   add(w1,.272);add(w2,.180);add(w3,.105);add(w4,.040);
   add(t1,.150);add(t2,.042);add(r1,.140);add(r2,.056);add(r3,.015);
+  // A back's overall depth-chart spot is set by rushing ability first — a
+  // real receiving specialist buried at RB4 because he isn't the better
+  // runner had the Third-down back trait but was never even in the target
+  // pool for it to boost, since only the top three backs by general rank
+  // were considered at all. His specialty is a real, separate skill; it
+  // shouldn't be gated behind out-rushing the starter first. Real NFL teams
+  // send 10-18% of all season targets to the RB position combined — a
+  // genuine receiving specialist can be the majority of that on his own, so
+  // a token base weight understates what the role is actually worth before
+  // any of the scaling below even runs.
+  const seenRB=new Set([r1,r2,r3].filter(Boolean).map(p=>p.id));
+  const rb4=(t.roster||[]).map(id=>S.players[id])
+    .find(p=>p&&!p.retired&&p.pos==="RB"&&!seenRB.has(p.id)&&hasSyn(p,"thirddown"));
+  if(rb4) add(rb4,.075);
   // shift toward the better players
   const base=avg(g.map(x=>x[0].ovr))||70;
   g.forEach(x=>x[1]*=Math.pow(Math.max(.5,x[0].ovr/base),1.9));
+  g.forEach(x=>{ for(const k of ["scramble","contested","yac","seam"])
+    if(hasSyn(x[0],k)) x[1]*=1+0.085*synWeight(x[0],k); });
+  // Third-down back is the role itself, not a garnish on top of an existing
+  // one the way the traits above are — a flat 8.5% bump was barely moving
+  // a specialist's actual share of the passing game.
+  g.forEach(x=>{ if(hasSyn(x[0],"thirddown")) x[1]*=1+0.55*synWeight(x[0],"thirddown"); });
   g.forEach(x=>{ for(const k of ["scramble","contested","yac","seam","thirddown"])
     if(hasSyn(x[0],k)) x[1]*=1+0.085*synWeight(x[0],k); });
   const s=sum(g.map(x=>x[1])); g.forEach(x=>x[1]/=s);
@@ -3693,8 +3713,15 @@ function makeProspect(){
   /* ---- raw public hype: production, brand, visible tape, résumé.
          Testing numbers are NOT in here yet — the combine hasn't happened. ---- */
   const brand=[0,86,70,54,36][ctx.tier];
-  p.draft.hype = 0.46*(prod*100*0.86) + 0.24*brand + 0.20*p.ovr +
-                 0.10*(ctx.starts*10 + (ctx.captain?6:0));
+  // Production carried 46% of public hype against just 20% for the man's
+  // actual current ability — college context (usage, teammates, scheme fit)
+  // could swing an ordinary prospect's perceived value almost as hard as the
+  // deliberate gem/fool mechanic does on purpose. 6.3% of prospects with
+  // no gem or fool tag at all were landing 12+ points off their true grade
+  // — treated as a routine outcome instead of the rare miss the archetype
+  // system was built to represent on its own.
+  p.draft.hype = 0.32*(prod*100*0.86) + 0.20*brand + 0.36*p.ovr +
+                 0.12*(ctx.starts*10 + (ctx.captain?6:0));
   p.draft.consensus = 60;
 
   buildNoteBank(p);
@@ -4632,13 +4659,7 @@ const SCREENS_TEAM=function(){
           <button class="mini" data-act="cutps" data-arg="${p.id}">Release</button>`:""}</td></tr>`).join("")}
         </tbody></table>`:`<div class="pb muted">The squad is empty. Sign young free agents to it from the market.</div>`}`;
   } else if(V.teamTab==="depth"){
-    body=`<div class="pb small muted">${own
-      ? "Tap a name to move him up the chart. The order here is the order they play in."
-      : "Their order of preference at each spot."}</div>`
-      +(own?`<div class="pb"><button class="btn" data-act="stafftask" data-arg="depth">Let the coaches set it</button></div>`:"")
-      +POS.map(pos=>{
-      const d=(t.depth[pos]||[]).map(id=>S.players[id]).filter(Boolean);
-      const rows=d.map((p,i)=>`<tr class="${i===0?"starter":""}">
+    const depthRowsFor=(pos,d)=>d.map((p,i)=>`<tr class="${i===0?"starter":""}">
         <td class="n dim" style="width:26px">${i+1}</td>
         <td class="click" data-act="player" data-arg="${p.id}">
           <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
@@ -4647,14 +4668,72 @@ const SCREENS_TEAM=function(){
           <div class="tiny dim">${esc(p.f)} · ${p.age} · ${p.pos!==pos
             ? "out of position" : fitWord(schemeFit(p))}</div></td>
         <td class="n ovrcell ${p.pos!==pos?"warn":""}">${ovrAt(p,pos)}</td>
-        <td style="width:52px">${own&&i>0?`<button class="mini" data-act="promote" data-arg="${pos}" data-arg2="${p.id}">▲</button>`:""}</td>
+        <td style="width:78px" class="row" style="gap:2px">${own&&i>0?`<button class="mini" data-act="promote" data-arg="${pos}" data-arg2="${p.id}">▲</button>`:""}${
+          own?`<button class="mini" data-act="dropdepth" data-arg="${pos}" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
       </tr>`).join("");
+    const addSelectFor=(pos,d)=>{
+      const already=new Set(d.map(p=>p.id));
+      const addOptions=own?t.roster.map(id=>S.players[id]).filter(p=>p&&!p.retired&&!already.has(p.id))
+        .sort((a,b)=>ovrAt(b,pos)-ovrAt(a,pos)):[];
+      return own&&addOptions.length?`<div class="pb tight" style="padding:6px 10px 8px">
+          <select data-act="adddepth" data-arg="${pos}" style="width:100%;font-size:12.5px">
+            <option value="">Add someone else to ${pos}…</option>
+            ${addOptions.map(p=>`<option value="${p.id}">${esc(p.pos)} ${esc(p.f)} ${esc(p.l)} — ${ovrAt(p,pos)} here${p.pos!==pos?" (out of position)":""}</option>`).join("")}
+          </select></div>`:"";
+    };
+    // The scheme already decides who actually plays where among the defensive
+    // backs — nickel, big nickel, free vs strong safety — every week, purely
+    // to run the games themselves. It just never showed up anywhere the
+    // person could see it, so the chart only ever showed generic CB1/CB2/CB3
+    // and S1/S2/S3, no matter how differently two schemes actually used them.
+    assignDefensiveRoles(t);
+    const roleRow=(label,role,pos)=>{
+      const p=defensiveRolePlayer(t,role);
+      if(!p) return `<tr><td colspan="3" class="dim small">${label} — nobody fits</td></tr>`;
+      return `<tr><td class="dim small" style="width:80px">${label}</td>
+        <td class="click" data-act="player" data-arg="${p.id}"><b>${esc(p.l)}</b>
+          ${p.pos!==pos?` <span class="tag">${p.pos}</span>`:""}
+          <div class="tiny dim">${esc(p.f)} · ${p.age}</div></td>
+        <td class="n ovrcell">${Math.round(functionalOVR(p,role==="CB1"||role==="CB2"?"NB":role))}</td></tr>`;
+    };
+    const dbUsed=new Set(["NB","FS","SS","CB1","CB2","bigNickel"].map(r=>t.defRoles&&t.defRoles[r]).filter(Boolean));
+    const dbAddOptions=own?t.roster.map(id=>S.players[id]).filter(p=>p&&!p.retired&&(p.pos==="CB"||p.pos==="S")&&!dbUsed.has(p.id)):[];
+    const dbSection=`<div class="depthgrp"><div class="row spread depthhead">
+        <span>Defensive backs <b class="small">by scheme role, not raw position</b></span>
+        <span class="tiny dim">${(t.staff.DC&&t.staff.DC.scheme)||"base"}</span></div>
+        <table class="depthtable"><tbody>
+          ${roleRow("Corner 1","CB1","CB")}${roleRow("Corner 2","CB2","CB")}
+          ${roleRow("Nickel","NB","CB")}${roleRow("Free safety","FS","S")}
+          ${roleRow("Strong safety","SS","S")}
+          ${defensiveRolePlayer(t,"bigNickel")?roleRow("Big nickel","bigNickel","S"):""}
+        </tbody></table>
+        <div class="pb tight small muted" style="padding:6px 10px">Chosen fresh each week from every CB and S on the roster — best fit for each role, not just best overall. Injury or a holdout bumps the next man in line.</div>
+        ${own&&dbAddOptions.length?`<div class="pb tight small muted" style="padding:0 10px 8px">Not seeing someone you expected? He's a CB or S already claimed by another role above — check the generic CB/S lists below to reorder who the scheme prefers.</div>`:""}
+      </div>`;
+    body=`<div class="pb small muted">${own
+      ? "Tap a name to move him up the chart. The order here is the order they play in. A man can hold a spot at more than one position — a tight end who's also your fourth receiver doesn't have to give one up, since they were never on the field at the same time anyway."
+      : "Their order of preference at each spot."}</div>`
+      +(own?`<div class="pb"><button class="btn" data-act="stafftask" data-arg="depth">Let the coaches set it</button></div>`:"")
+      +dbSection
+      +POS.filter(pos=>pos!=="CB"&&pos!=="S").map(pos=>{
+      const d=(t.depth[pos]||[]).map(id=>S.players[id]).filter(Boolean);
       return `<div class="depthgrp"><div class="row spread depthhead">
         <span>${posTag(pos)} <b class="small">${POSNAME[pos]||pos}</b></span>
         <span class="tiny dim">${d.length} deep</span></div>
-        ${rows?`<table class="depthtable"><tbody>${rows}</tbody></table>`
-              :"<div class='pb muted small'>Nobody here.</div>"}</div>`;
-    }).join("");
+        ${d.length?`<table class="depthtable"><tbody>${depthRowsFor(pos,d)}</tbody></table>`
+              :"<div class='pb muted small'>Nobody here.</div>"}
+        ${addSelectFor(pos,d)}</div>`;
+    }).join("")
+      +`<div class="depthgrp"><div class="row spread depthhead">
+        <span>${posTag("CB")} <b class="small">CB — full list</b></span>
+        <span class="tiny dim">${(t.depth.CB||[]).length} deep</span></div>
+        ${(t.depth.CB||[]).length?`<table class="depthtable"><tbody>${depthRowsFor("CB",(t.depth.CB||[]).map(id=>S.players[id]).filter(Boolean))}</tbody></table>`:"<div class='pb muted small'>Nobody here.</div>"}
+        ${addSelectFor("CB",(t.depth.CB||[]).map(id=>S.players[id]).filter(Boolean))}</div>`
+      +`<div class="depthgrp"><div class="row spread depthhead">
+        <span>${posTag("S")} <b class="small">S — full list</b></span>
+        <span class="tiny dim">${(t.depth.S||[]).length} deep</span></div>
+        ${(t.depth.S||[]).length?`<table class="depthtable"><tbody>${depthRowsFor("S",(t.depth.S||[]).map(id=>S.players[id]).filter(Boolean))}</tbody></table>`:"<div class='pb muted small'>Nobody here.</div>"}
+        ${addSelectFor("S",(t.depth.S||[]).map(id=>S.players[id]).filter(Boolean))}</div>`;
   } else {
     const ps=t.roster.map(id=>S.players[id]).filter(p=>p&&p.stats.gp);
     const tbl=(title,key,rows,cols,defCol)=>{
@@ -4880,12 +4959,20 @@ const SCREENS_SCOUT=function(){
     const r=S.scout[p.id], g=myGrade(p.id);
     const gap=g.est-p.draft.consensus;
     const known=r.k>=18;
+    // Even a shallow look (an area sweep, a first pass of tape) already
+    // shifts the estimate a little — not enough to trust the number, but
+    // enough for a rough arrow pointing at whether the board might be
+    // wrong about him, which is exactly what decides who's worth spending
+    // real hours on next. swept is a flag that survives past the one-time
+    // toast a sweep used to leave behind, so a name doesn't quietly stop
+    // being worth a second look just because the message scrolled away.
+    const earlyArrow = !known && r.k>0 ? (gap>=3?"▲":gap<=-3?"▼":"") : "";
     return `<tr class="click" data-act="prospect" data-arg="${p.id}">
       <td class="n dim">${p.draft.rank}</td>
       <td>${posTag(p.pos)}</td>
-      <td>${esc(p.f[0])}. ${esc(p.l)}<br><span class="dim tiny">${esc(p.draft.ctx.school)}</span></td>
-      <td class="n">${known?Math.round(g.est):`<span class="dim">–</span>`}
-        <br><span class="dim tiny">${known?`±${Math.round(g.band)}`:"unseen"}</span></td>
+      <td>${esc(p.f[0])}. ${esc(p.l)}${r.swept?` <span class="tag ${r.swept==="up"?"gold":"red"}" title="Flagged by an area sweep">${r.swept==="up"?"★":"⚠"}</span>`:""}<br><span class="dim tiny">${esc(p.draft.ctx.school)}</span></td>
+      <td class="n">${known?Math.round(g.est):(earlyArrow?`<span class="${gap>0?"good":"warn"}">${earlyArrow}</span>`:`<span class="dim">–</span>`)}
+        <br><span class="dim tiny">${known?`±${Math.round(g.band)}`:(earlyArrow?"early look":"unseen")}</span></td>
       <td class="n">${known&&Math.abs(gap)>=3?`<span class="tag ${gap>0?"gold":"red"}">${gap>0?"+":""}${Math.round(gap)}</span>`:""}
         <div class="meter" style="margin-top:4px"><i style="width:${Math.round(r.k)}%"></i></div></td>
     </tr>`;}).join("");
@@ -5487,6 +5574,28 @@ const ACT={
     const i=d.indexOf(+pid);
     if(i>0){ d[i]=d[i-1]; d[i-1]=+pid; t.depthManual=true; render(); }
   },
+  adddepth:(pos,pid)=>{
+    if(!pid) return;
+    const t=S.teams[S.userTeam];
+    const p=S.players[+pid]; if(!p||!t.roster.includes(p.id)) return;
+    // Deliberately does not touch any other position's list — a tight end
+    // who's also the fourth receiver was never on the field at both jobs on
+    // the same snap, so there's no real conflict in him holding a spot at
+    // each. This is the only way to put someone here who the auto-assigner
+    // already claimed for a different job first.
+    t.depth[pos]=t.depth[pos]||[];
+    if(!t.depth[pos].includes(p.id)) t.depth[pos].push(p.id);
+    t.depthManual=true;
+    toast(`${p.l} added to ${pos}.`);
+    render();
+  },
+  dropdepth:(pos,pid)=>{
+    const t=S.teams[S.userTeam];
+    const d=t.depth[pos]; if(!d) return;
+    t.depth[pos]=d.filter(id=>id!==+pid);
+    t.depthManual=true;
+    render();
+  },
   depthauto:()=>{
     const t=S.teams[S.userTeam];
     t.depthManual=false; autoDepth(t); toast("Chart reset to best available."); render();
@@ -5665,8 +5774,13 @@ const ACT={
       if(!r.scoutIds.includes(sc.id)) r.scoutIds.push(sc.id);
       // A sweep used to just count how many names looked interesting and
       // throw the number away — the player had no way to know who, short of
-      // re-scanning the whole board by hand afterward.
-      if(myGrade(p.id).est-p.draft.consensus>=6) flagged.push(p);
+      // re-scanning the whole board by hand afterward, and even armed with
+      // the name, there was nothing marking him once the toast scrolled
+      // away. This sticks a real flag on the scouting record itself, so the
+      // board shows it every time he's looked at until he's actually been
+      // scouted enough to confirm or deny it.
+      if(myGrade(p.id).est-p.draft.consensus>=6){ flagged.push(p); r.swept="up"; }
+      else if(myGrade(p.id).est-p.draft.consensus<=-6){ r.swept="down"; }
     }
     const names=flagged.map(p=>`${p.pos} ${p.l}`);
     toast(`${sc.name} looked at ${pool.length} names${flagged.length?`; worth another look: ${names.join(", ")}`:""}.`);
