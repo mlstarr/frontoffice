@@ -32,7 +32,8 @@ header{
   position:sticky; top:0; z-index:40; background:var(--ink); color:#EFEEE4;
   padding:calc(8px + env(safe-area-inset-top)) 12px 8px;
   display:flex; align-items:center; gap:10px;
-  border-bottom:3px solid var(--field);
+  border-bottom:4px solid var(--team);
+  box-shadow:0 2px 8px rgba(0,0,0,.15);
 }
 header .crest{width:34px;height:34px;border-radius:2px;flex:0 0 auto;display:grid;place-items:center;
   font-family:var(--serif);font-weight:700;font-size:14px;color:#fff}
@@ -49,8 +50,10 @@ header .cap i{font-style:normal;color:#A9B4BC;font-family:var(--sans);font-size:
 
 /* ---- layout ---- */
 main{max-width:840px;margin:0 auto;padding:12px 12px 24px}
-.panel{background:var(--card); border:1px solid var(--rule); border-radius:3px; margin:0 0 12px}
-.panel > .ph{display:flex;align-items:baseline;gap:8px;padding:9px 12px;border-bottom:1px solid var(--rule2)}
+.panel{background:var(--card); border:1px solid var(--rule); border-radius:5px; margin:0 0 12px;
+  box-shadow:0 1px 3px rgba(28,40,51,.06)}
+.panel > .ph{display:flex;align-items:baseline;gap:8px;padding:10px 12px;border-bottom:2px solid var(--rule2);
+  background:linear-gradient(to bottom,rgba(28,40,51,.025),transparent)}
 .panel > .ph h2,.panel > .ph h3{flex:1}
 .panel > .ph .sub{font-size:12px;color:var(--ink2)}
 .pb{padding:12px}
@@ -66,7 +69,7 @@ hr.rule{border:0;border-top:1px solid var(--rule2);margin:10px 0}
 /* ---- buttons ---- */
 button{font:inherit;cursor:pointer}
 .btn{background:var(--card);border:1px solid var(--ink2);color:var(--ink);
-  padding:7px 12px;border-radius:3px;font-size:14px}
+  padding:7px 12px;border-radius:4px;font-size:14px;font-weight:500;box-shadow:0 1px 2px rgba(28,40,51,.07)}
 .btn:active{transform:translateY(1px)}
 /* Most clicks call render(), which replaces the DOM outright — the browser
    was rarely getting a chance to actually paint :active before the element
@@ -116,21 +119,22 @@ select{appearance:none;-webkit-appearance:none;padding:6px 26px 6px 10px;font-si
 .ul{text-decoration:underline;text-underline-offset:2px}
 /* ---- the club's own colour, set on every render ---- */
 :root{--team:#2E5E4E;--teamink:#fff}
-.ph{border-left:3px solid transparent}
+.ph{border-left:4px solid transparent}
 .panel>.ph:first-child{border-left-color:var(--team)}
 .chip[aria-pressed="true"]{background:var(--team);border-color:var(--team);color:var(--teamink)}
 nav button[aria-current="page"]{color:var(--team)}
 nav button[aria-current="page"] .ic{background:var(--team);color:var(--teamink)}
 .meter i{background:var(--team)}
 .meter i.green{background:var(--field2)} .meter i.red{background:var(--red)}
-.btn.primary{background:var(--team);border-color:var(--team);color:var(--teamink)}
+.btn.primary{background:var(--team);border-color:var(--team);color:var(--teamink);
+  box-shadow:0 1px 4px rgba(0,0,0,.18)}
 
 /* ---- the number you are actually looking for ---- */
 .bignum{font-family:var(--mono);font-variant-numeric:tabular-nums;
-  font-size:38px;line-height:1;font-weight:600;letter-spacing:-.02em}
+  font-size:40px;line-height:1;font-weight:700;letter-spacing:-.02em;color:var(--team)}
 .midnum{font-family:var(--mono);font-variant-numeric:tabular-nums;
   font-size:22px;line-height:1;font-weight:600}
-.stat b{font-size:19px}
+.stat b{font-size:21px;color:var(--team);font-weight:700}
 
 /* ---- matchday ---- */
 .hero{border-radius:4px;overflow:hidden;margin:0 0 10px}
@@ -144,7 +148,7 @@ nav button[aria-current="page"] .ic{background:var(--team);color:var(--teamink)}
   font-family:var(--serif);font-size:12px;color:var(--ink3)}
 .hero .line{padding:8px 12px;background:var(--card);border-top:1px solid var(--rule2);
   font-size:12px;color:var(--ink2)}
-.hero .score{font-family:var(--mono);font-size:30px;line-height:1;font-weight:600}
+.hero .score{font-family:var(--mono);font-size:34px;line-height:1;font-weight:700}
 
 /* ---- a moment that deserves the whole screen ---- */
 .takeover{position:fixed;inset:0;z-index:60;display:grid;place-items:center;
@@ -210,7 +214,8 @@ body.at-menu #hdr .cap,body.at-menu #hdr .crest{display:none}
 .depthrow{padding:2px 0}
 .depthrow .num.d{display:inline-block;width:14px;color:var(--ink3);font-size:11px}
 tr.mine td{background:var(--paper2);font-weight:600}
-.good{color:var(--field)}
+.good{color:var(--field2);font-weight:600}
+.warn{color:var(--red);font-weight:600}
 .ph.tight{padding-top:4px;padding-bottom:2px}
 h3.sm{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink2)}
 td{padding:7px 8px;border-bottom:1px solid var(--rule2);vertical-align:middle}
@@ -253,8 +258,8 @@ tbody tr.click:active{background:var(--paper2)}
 .newsitem .w{font-family:var(--mono);font-size:11px;color:var(--ink3)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.stat{background:var(--paper2);border:1px solid var(--rule2);border-radius:3px;padding:8px}
-.stat b{display:block;font-family:var(--mono);font-size:18px;line-height:1.1}
+.stat{background:var(--paper2);border:1px solid var(--rule2);border-radius:4px;padding:9px 8px}
+.stat b{display:block;font-family:var(--mono);font-size:21px;line-height:1.15;color:var(--team);font-weight:700}
 .stat span{font-size:11px;color:var(--ink2)}
 
 /* ---- nav ---- */
@@ -265,7 +270,7 @@ nav button{flex:1;min-width:0;background:none;border:0;color:#8D979F;padding:8px
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (min-width:420px){ nav button{font-size:10.5px;padding:8px 2px 9px} }
 nav button b{font-family:var(--serif);font-size:15px;font-weight:600;line-height:1}
-nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--field2)}
+nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--team)}
 
 /* ---- sheet / modal ---- */
 .veil{position:fixed;inset:0;background:rgba(20,26,32,.55);z-index:60;display:flex;
@@ -308,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--fie
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.01";
+const APP_VERSION = "0.03";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -634,6 +639,36 @@ function rookieAPY(overall){
   const floor=(typeof MIN_SALARY!=="undefined")?MIN_SALARY:885e3;
   return Math.round(Math.max(floor, base)*cs/1e4)*1e4;
 }
+/* A freshly generated 22-year-old was being paid exactly like a proven
+   veteran of the same overall — marketAPY's age discount is only 8%, nowhere
+   near what actually separates a rookie deal from open-market value, and
+   there was no rookie-scale contract at all outside the real draft. This
+   estimates the draft slot his talent and position would plausibly have
+   commanded (a real QB prospect gets pulled up the board relative to his
+   grade the way a punter never does, same as the real draft board does),
+   runs it through the same rookie-scale curve an actual draftee gets, and
+   fades that in toward full market value as simulated experience builds —
+   a genuine rookie pays rookie scale; a make-believe 6-year veteran of the
+   same age doesn't. */
+function initialRookieAPY(p){
+  // A linear ovr-to-pick mapping badly undersold real elite talent — a 92
+  // overall safety was landing around pick 60 instead of the top-10 slot
+  // that overall would actually command. Real draft stock isn't linear in
+  // OVR at all: the gap from very-good to elite compresses draft position
+  // far more sharply than the gap from average to good does, so this
+  // follows that curve instead. Position still shifts him up or down the
+  // board the way it does in the real draft — a QB gets pulled up relative
+  // to his grade the way a punter never does — but as an adjustment to
+  // where he sits on the curve, not a separate linear penalty stacked on
+  // top of one that was already too soft.
+  const posAdj=(draftVal(p.pos)-1)*11;
+  let est=8*Math.exp((90-(p.ovr+posAdj))/7.76);
+  if(p.pos==="K"||p.pos==="P") est=Math.max(est,140);   // specialists just don't go early, whatever the grade
+  est=clamp(Math.round(est),1,260);
+  const rookieRate=rookieAPY(est);
+  const blend=clamp((p.exp||0)/4,0,1);
+  return Math.round((rookieRate*(1-blend)+marketAPY(p)*blend)/1e4)*1e4;
+}
 
 /* ---------- misc string helpers ---------- */
 function posClass(p){return POSGROUP[p];}
@@ -858,20 +893,27 @@ function coachFromAlumnus(p,role){
   const proj=(p.coachProj||46)/100, h=p.hidden||{}, a=p.a||{};
   const base=52+proj*26;
   const c={id:S.nextId++, f:p.f, l:p.l, role,
-    off:c99(gauss(base+(p.alumRole==="OC"?7:-7),8)),
-    def:c99(gauss(base+(p.alumRole==="DC"?7:-7),8)),
     dev:c99(gauss(base+((h.wrk||65)-65)*.22,9)),
-    gm:c99(gauss(base+((a.awr||62)-62)*.22,9)),
     disc:c99(gauss(base+((h.disc||68)-68)*.25,9)),
     years:ri(1,4),
     age:Math.max(32,(p.age||34)+(S.year-(p.retiredYear||S.year))),
     onMarket:0, playedAs:p.pos, playerId:p.id};
-  if(role==="OC"){c.def=c99(c.def-14);} if(role==="DC"){c.off=c99(c.off-14);}
+  if(role==="SD"){
+    // A retired player's own football IQ (awareness) is the closest thing
+    // he brings to evaluating other players' talent — not his old play-
+    // caller ratings, which an alumnus SD was getting anyway.
+    c.eval=c99(gauss(base+((a.awr||62)-62)*.30,9));
+  } else {
+    c.off=c99(gauss(base+(p.alumRole==="OC"?7:-7),8));
+    c.def=c99(gauss(base+(p.alumRole==="DC"?7:-7),8));
+    c.gm=c99(gauss(base+((a.awr||62)-62)*.22,9));
+    if(role==="OC"){c.def=c99(c.def-14);} if(role==="DC"){c.off=c99(c.off-14);}
+  }
   c.name=c.f+" "+c.l;
   if(typeof TEAM_SCHEMES!=="undefined"&&TEAM_SCHEMES[role])
     c.scheme=pick(Object.keys(TEAM_SCHEMES[role]));
   if(typeof rollCoachPotential==="function"){ rollCoachPotential(c); c.salary=c.value=coachValue(c); }
-  else c.salary=Math.round(1.6e6*(0.6+(c.off+c.def+c.dev)/300));
+  else c.salary=Math.round(1.6e6*(0.6+((c.off||c.eval||62)+(c.def||c.eval||62)+c.dev)/300));
   p.coached=1;
   trimAlumnus(p);
   return c;
@@ -890,15 +932,26 @@ function makeCoach(role){
   }
   const [cf,cl]=pickUniqueName();
   const c={id:S.nextId++, f:cf, l:cl, role,
-    off:c99(gauss(62,13)), def:c99(gauss(62,13)),
     dev:c99(gauss(62,13)),      // player development
-    gm:c99(gauss(62,13)),       // game management / clutch
     disc:c99(gauss(62,13)),     // discipline (penalties, morale)
     years:ri(1,4),
     age: role==="HC"? ri(41,63) : ri(33,58),
     onMarket:0};
+  if(role==="SD"){
+    // A scouting director doesn't call plays or manage a game clock — off,
+    // def and gm were generated and shown for him anyway, three ratings
+    // that meant nothing for what the job actually is. eval is his real
+    // skill: how accurately the department reads a prospect's true talent,
+    // which is what actually drove buildAIBoard's noise before this — a
+    // fixed, random per-team constant with no connection to who the team
+    // had actually hired for the job.
+    c.eval=c99(gauss(62,13));
+  } else {
+    c.off=c99(gauss(62,13)); c.def=c99(gauss(62,13));
+    c.gm=c99(gauss(62,13));       // game management / clutch
+  }
   if(role==="OC"){c.def=c99(c.def-14);} if(role==="DC"){c.off=c99(c.off-14);}
-  c.salary=Math.round((role==="HC"?4e6:1.6e6)*(0.6+ (c.off+c.def+c.dev)/300));
+  c.salary=Math.round((role==="HC"?4e6:1.6e6)*(0.6+ ((c.off||c.eval||62)+(c.def||c.eval||62)+c.dev)/300));
   c.name=c.f+" "+c.l;
   if(typeof TEAM_SCHEMES!=="undefined"&&TEAM_SCHEMES[role])
     c.scheme=pick(Object.keys(TEAM_SCHEMES[role]));
@@ -933,7 +986,7 @@ function fillRoster(team,strength){
     const p=makePlayer(pos,target,age);
     p.exp=Math.max(0,p.age-22-ri(0,1));
     const yrs=contractYears(p);
-    signPlayer(p,team.id,marketAPY(p),yrs,rf(.3,.6));
+    signPlayer(p,team.id,initialRookieAPY(p),yrs,rf(.3,.6));
     p.contract.left=ri(1,yrs);
     S.players[p.id]=p; team.roster.push(p.id);
   }
@@ -968,7 +1021,7 @@ function calibrateMoney(){
   for(const t of S.teams) for(const id of t.roster){
     const p=S.players[id];
     const left=p.contract?p.contract.left:contractYears(p);
-    signPlayer(p,t.id,marketAPY(p),Math.max(1,left),rf(.3,.6));
+    signPlayer(p,t.id,initialRookieAPY(p),Math.max(1,left),rf(.3,.6));
     p.contract.left=left;
   }
   // every club starts the game cap-legal: stars are on the books, the rest gets squeezed
@@ -1048,12 +1101,18 @@ function ovrAtRaw(p,pos){
   if(meSpec&&!itSpec) return Math.max(20,Math.round(computeOVR(pos,p.a)*0.55));
   const raw=computeOVR(pos,p.a);
   const d=posDistance(p.pos,pos);
-  // learning a new job costs less if he sees the game well
   // A generic mismatch (d=5, e.g. a quarterback at corner) was only costing
   // about 12 points off his rating — not nearly enough to keep a roster from
   // routinely stacking a depth chart with players out of position rather
   // than carrying (or signing) someone who actually plays the spot.
-  const unfamiliar = d*3.6 * (1 - clamp(((p.a.awr||55)-50)/110,0,0.42));
+  // A career backup and a ten-year starter at the same job were also treated
+  // as equally movable — years of reps at one spot build a specific comfort
+  // and pattern-recognition there that doesn't just transfer because the
+  // body still can. The longer he's actually played his own position, the
+  // more that unfamiliarity should cost him elsewhere, capped so it isn't
+  // unbounded for a true long-tenured veteran.
+  const tenureFactor=clamp(1+(p.exp||0)*0.055,1,2.1);
+  const unfamiliar = d*3.6*tenureFactor * (1 - clamp(((p.a.awr||55)-50)/110,0,0.42));
   return Math.max(20, Math.round(raw - unfamiliar));
 }
 function posScore(p,pos){
@@ -3760,7 +3819,13 @@ function generateDraftClass(){
 }
 function buildAIBoard(t){
   t.board={};
-  const skill=t.ai.scoutSkill;
+  // t.ai.scoutSkill is a fixed trait rolled once when the team was created —
+  // it never moved no matter who the team actually hired to run the
+  // department. The SD's own eval rating now pulls it the rest of the way,
+  // so firing a bad scouting director for a good one actually does
+  // something to how sharp the board is, not just to his salary line.
+  const sd=t.staff&&t.staff.SD;
+  const skill=sd&&sd.eval!==undefined ? clamp(t.ai.scoutSkill*0.4+(sd.eval/99)*0.6,.1,.98) : t.ai.scoutSkill;
   for(const id of S.prospects){
     const p=S.players[id];
     const blend=0.22+0.66*skill;
@@ -6521,6 +6586,7 @@ function aiFacWeight(t,k){
 
 /* ---------- staff market ---------- */
 function coachOverall(c){
+  if(c.role==="SD") return Math.round(c.eval*0.55 + c.dev*0.30 + c.disc*0.15);
   return Math.round((Math.max(c.off,c.def)*0.34 + c.dev*0.34 + c.gm*0.18 + c.disc*0.14));
 }
 function refreshStaffMarket(){
@@ -6874,14 +6940,15 @@ const OFFICE_BODY={
           return `<div class="tiny ${tr.dir==="up"?"good":"warn"}">His stock has been ${tr.word}.</div>`;})()}
         <div class="tiny dim">Age ${c.age||"—"} · ${esc(coachReputation(c))}</div>
         <div class="row spread small" style="margin-top:6px">
-          <span>Scheme ${k==="DC"?c.def:c.off}</span><span>Develop ${c.dev}</span>
-          <span>Game day ${c.gm}</span><span>Discipline ${c.disc}</span></div>
+          ${k==="SD"?`<span>Eval ${c.eval}</span><span>Develop ${c.dev}</span><span>Discipline ${c.disc}</span>`
+            :`<span>Scheme ${k==="DC"?c.def:c.off}</span><span>Develop ${c.dev}</span>
+          <span>Game day ${c.gm}</span><span>Discipline ${c.disc}</span>`}</div>
         <button class="btn danger" data-act="firecoach" data-arg="${k}">Move on — ${fmtM(buyoutCost(c))} buyout</button>
       </div></div>`;
     };
     const market=applySort("staffmkt",(S.staffMarket||[]).slice(),{
       role:c=>c.role, name:c=>c.name, ovr:c=>coachRead(c).est,
-      dev:c=>c.dev, ask:c=>c.asking, gm:c=>c.gm, disc:c=>c.disc
+      dev:c=>c.dev, ask:c=>c.asking, gm:c=>c.role==="SD"?c.eval:c.gm, disc:c=>c.disc
     },"ovr");
     return `<div class="pb grid2">
         <div class="stat"><b>${fmtM(t.cash)}</b><span>Cash on hand</span></div>
@@ -6892,14 +6959,14 @@ const OFFICE_BODY={
       ${market.length?`<div class="scroll"><table><thead><tr>
         ${sortTH("staffmkt","role","Role","","asc")}${sortTH("staffmkt","name","Name","","asc")}
         ${sortTH("staffmkt","ovr","Ovr","n",null,"Projected rating — narrows with each interview")}${sortTH("staffmkt","dev","Dev","n",null,"Player development")}
-        ${sortTH("staffmkt","gm","Game","n",null,"Game management")}<th>Scheme</th>
+        ${sortTH("staffmkt","gm","Game/Eval","n",null,"Game management for coaches — evaluation accuracy for a scouting director")}<th>Scheme</th>
         ${sortTH("staffmkt","ask","Asking","n",null,"Asking salary per year")}<th></th></tr></thead>
         <tbody>${market.map(c=>{const rd=coachRead(c);
           return `<tr><td class="muted small">${c.role} <span class="dim">${c.age||"—"}</span></td>
           <td>${esc(c.name)}<div class="tiny dim">${esc(coachReputation(c))}${
             (c.interviews||0)?` · ${c.interviews} interview${c.interviews>1?"s":""}`:""}</div></td>
           <td class="n ovr">${Math.round(rd.est)}<div class="tiny dim">±${Math.round(rd.band)}</div></td><td class="n">${c.dev}</td>
-          <td class="n">${c.gm}</td>
+          <td class="n">${c.role==="SD"?c.eval:c.gm}</td>
           <td class="small dim">${c.scheme&&TEAM_SCHEMES[c.role]?TEAM_SCHEMES[c.role][c.scheme].name:"—"}</td>
           <td class="n">${fmtM(c.asking)}</td>
           <td><button class="chip" data-act="hirecoach" data-arg="${c.id}">Hire</button>
@@ -9747,15 +9814,17 @@ function progressCoach(c,t,role){
   const applied=clamp(d,-3.2,3.6);
   const target=clamp(cur+applied,35,Math.min(pot,COACH_CAP));
   const scale=target/Math.max(1,cur);
-  for(const k of ["off","def","dev","gm","disc"]) c[k]=clamp(Math.round(c[k]*scale),25,99);
+  const keys=role==="SD"?["eval","dev","disc"]:["off","def","dev","gm","disc"];
+  for(const k of keys) c[k]=clamp(Math.round(c[k]*scale),25,99);
   // a coordinator's own side of the ball moves fastest
   if(role==="OC") c.off=clamp(Math.round(c.off+applied*0.7),25,99);
   if(role==="DC") c.def=clamp(Math.round(c.def+applied*0.7),25,99);
   if(role==="HC"){ c.gm=clamp(Math.round(c.gm+applied*0.4),25,99);
                    c.disc=clamp(Math.round(c.disc+applied*0.4),25,99); }
+  if(role==="SD") c.eval=clamp(Math.round(c.eval+applied*0.6),25,99);
   if(coachOverall(c)>pot){
     const back=pot/Math.max(1,coachOverall(c));
-    for(const k of ["off","def","dev","gm","disc"]) c[k]=clamp(Math.round(c[k]*back),25,99);
+    for(const k of keys) c[k]=clamp(Math.round(c[k]*back),25,99);
   }
   if(t&&t.w-expectedWins(t)>1) c.goodYears=(c.goodYears||0)+1;
   c.log=c.log||[];
