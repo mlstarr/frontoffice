@@ -68,6 +68,16 @@ button{font:inherit;cursor:pointer}
 .btn{background:var(--card);border:1px solid var(--ink2);color:var(--ink);
   padding:7px 12px;border-radius:3px;font-size:14px}
 .btn:active{transform:translateY(1px)}
+/* Most clicks call render(), which replaces the DOM outright — the browser
+   was rarely getting a chance to actually paint :active before the element
+   it applied to was destroyed and rebuilt, so a tap could register and act
+   with nothing visible ever happening. This class is applied by JS the
+   instant a click lands, held for one short beat before the real action
+   fires, so there's always a visible moment of "yes, that registered"
+   first, on anything with data-act — button, chip, or table row alike. */
+[data-act].tap-flash, [data-act].tap-flash .btn, tr.tap-flash td{
+  background:var(--field2)!important; color:#fff!important; transition:background .12s ease}
+.chip.tap-flash{background:var(--ink)!important; border-color:var(--ink)!important; color:#fff!important}
 .btn:disabled{opacity:.4;cursor:default}
 .btn.primary{background:var(--field);border-color:var(--field);color:#fff;font-weight:600}
 .btn.danger{border-color:var(--red);color:var(--red)}
@@ -298,7 +308,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--fie
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "2026-09-21.1";
+const APP_VERSION = "0.01";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -5636,12 +5646,21 @@ document.addEventListener("click",e=>{
   const fn=ACT[el.dataset.act];
   if(fn){
     V.scrollY=window.scrollY;
-    // Nothing between a click and its handler used to catch a thrown error —
-    // one bad ACT call would just vanish with no explanation, leaving the
-    // person staring at a screen that silently did nothing. Every action now
-    // fails into a message instead of into the void.
-    try{ fn(el.dataset.arg,el.dataset.arg2,e); }
-    catch(err){ console.error(el.dataset.act,err); toast("That didn't go through — try again."); }
+    // Most handlers call render() and replace the DOM before the browser
+    // ever paints a pressed state on the element that was clicked — the tap
+    // worked, but nothing visible said so. Flashing the element and giving
+    // the browser one short beat to actually draw it, before the handler
+    // (and its render()) runs, means every click gets a moment of visible
+    // confirmation first, win or fail, instead of just silently happening.
+    el.classList.add("tap-flash");
+    setTimeout(()=>{
+      // Nothing between a click and its handler used to catch a thrown error —
+      // one bad ACT call would just vanish with no explanation, leaving the
+      // person staring at a screen that silently did nothing. Every action now
+      // fails into a message instead of into the void.
+      try{ fn(el.dataset.arg,el.dataset.arg2,e); }
+      catch(err){ console.error(el.dataset.act,err); toast("That didn't go through — try again."); }
+    },90);
   }
 });
 document.addEventListener("change",e=>{
