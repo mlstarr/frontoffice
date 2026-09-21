@@ -296,6 +296,10 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--fie
    ============================================================ */
 "use strict";
 
+// Bump this every time a new index.html is produced, so the build showing
+// on the front page always identifies which one is actually running.
+const APP_VERSION = "2026-09-21.1";
+
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
   t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -990,14 +994,25 @@ function buildLeague(){
 
 /* ---------- depth chart ---------- */
 /* How near one job is to another. Nothing is impossible — a quarterback can
-   line up at corner — but the further from home, the less of him you get. */
+   line up at corner — but the further from home, the less of him you get.
+   The OL block used to treat "same side" as the thing that made a move
+   easy — LG->LT was rated as cheap as LG->RG, while LG->RT was rated
+   harder, purely because of which side of the ball it was on. Side isn't
+   the real divide; guard and tackle are different jobs regardless of side
+   (tackle wants length and lateral quickness in space, guard wants power
+   and a shorter set), so every guard-to-tackle move now costs the same
+   whichever side it's headed to. Center is its own, more specialized job
+   again — close enough to guard that either one can fill in there without
+   much falling off, but a tackle stepping in isn't a near-miss the way a
+   guard is; it's a real, separate skill (snapping, the line calls, a
+   shorter drop) that his own position never asked of him. */
 const POS_KIN={
   QB:{RB:3,WR:3,TE:4}, RB:{WR:2,TE:3,S:3,LB:3}, WR:{RB:2,TE:2,CB:3,S:3},
   TE:{WR:2,RB:3,LT:3,RT:3,LG:3,RG:3,C:4,EDGE:3},
-  LT:{RT:1,LG:1,RG:2,C:2,TE:3}, RT:{LT:1,RG:1,LG:2,C:2,TE:3},
-  LG:{RG:1,C:1,LT:1,RT:2}, RG:{LG:1,C:1,RT:1,LT:2}, C:{LG:1,RG:1,LT:2,RT:2},
+  LT:{RT:1,LG:2,RG:2,C:3,TE:3}, RT:{LT:1,RG:2,LG:2,C:3,TE:3},
+  LG:{RG:1,C:1,LT:2,RT:2}, RG:{LG:1,C:1,RT:2,LT:2}, C:{LG:1,RG:1,LT:3,RT:3},
   EDGE:{DT:1,LB:1,TE:3}, DT:{EDGE:1,LG:3,RG:3,C:3}, LB:{EDGE:1,S:1,DT:2,RB:3},
-  CB:{S:1,WR:2,RB:3}, S:{CB:1,LB:1,WR:3,RB:3}, K:{P:1}, P:{K:1}
+  CB:{S:2,WR:2,RB:3}, S:{CB:2,LB:1,WR:3,RB:3}, K:{P:1}, P:{K:1}
 };
 function posDistance(from,to){
   if(from===to) return 0;
@@ -1024,7 +1039,11 @@ function ovrAtRaw(p,pos){
   const raw=computeOVR(pos,p.a);
   const d=posDistance(p.pos,pos);
   // learning a new job costs less if he sees the game well
-  const unfamiliar = d*2.4 * (1 - clamp(((p.a.awr||55)-50)/110,0,0.42));
+  // A generic mismatch (d=5, e.g. a quarterback at corner) was only costing
+  // about 12 points off his rating — not nearly enough to keep a roster from
+  // routinely stacking a depth chart with players out of position rather
+  // than carrying (or signing) someone who actually plays the spot.
+  const unfamiliar = d*3.6 * (1 - clamp(((p.a.awr||55)-50)/110,0,0.42));
   return Math.max(20, Math.round(raw - unfamiliar));
 }
 function posScore(p,pos){
@@ -5018,10 +5037,11 @@ function playerSheet(pid){
     ${(()=>{ const alt=bestOtherSpots(p,3).filter(x=>x.ovr>=Math.max(45,p.ovr-22));
       if(!alt.length) return "";
       return `<div class="pb tight"><div class="small" style="margin-bottom:4px">Elsewhere on the field</div>
-        <table class="stat"><tbody>${alt.map(x=>`<tr>
+        <table class="stat"><tbody>${alt.map(x=>`<tr${own?` class="click" data-act="switchpos" data-arg="${pid}" data-arg2="${x.pos}"`:""}>
           <td>${posTag(x.pos)} ${POSNAME[x.pos]||x.pos}</td>
           <td class="dim">${x.d<=1?"a natural move":x.d<=2?"could learn it":"out of his depth"}</td>
-          <td class="big">${x.ovr}</td></tr>`).join("")}</tbody></table></div>`;})()}
+          <td class="big">${x.ovr}</td></tr>`).join("")}</tbody></table>
+        ${own?`<p class="tiny dim" style="margin-top:4px">Tap a row to move him there — this is a permanent switch, meant for filling a roster hole, not a preview.</p>`:""}</div>`;})()}
     ${percentileLine(p)}
     ${own?`<div class="row wrap">
       ${p.contract&&p.contract.left<=1?`<button class="btn" data-act="extend" data-arg="${pid}">Offer extension</button>`:""}
@@ -5461,6 +5481,27 @@ const ACT={
     const dead=releasePlayer(p,t);
     toast(`Released ${p.l}. ${fmtM(dead)} in dead money.`);
     closeSheet(); render();
+  },
+  switchpos:(a,a2)=>{
+    const p=S.players[+a], newPos=a2, t=S.teams[S.userTeam];
+    if(!p||p.teamId!==S.userTeam) return;
+    if(newPos===p.pos) return;
+    // Capture what he's worth at the new spot before touching p.pos — ovrAtRaw
+    // reads his CURRENT position to judge how big a jump this is, so this has
+    // to happen first, not after.
+    const newOvr=ovrAtRaw(p,newPos);
+    const oldPos=p.pos;
+    // He keeps the same amount of room to grow, just measured from his new
+    // floor — a permanent move, not a one-week look, so his ceiling moves
+    // with him rather than staying pinned to the job he's leaving.
+    const room=(p.hidden.pot||p.ovr)-p.ovr;
+    p.pos=newPos;
+    p.ovr=newOvr;
+    p.hidden.pot=c99(newOvr+room);
+    p._at=null;
+    autoDepth(t);
+    toast(`${p.l} moves to ${POSNAME[newPos]||newPos} — ${newOvr} overall there now.`);
+    render();
   },
   autocut:(quiet)=>{
     const t=S.teams[S.userTeam];
@@ -10509,6 +10550,7 @@ function menuScreen(){
       <div class="menu-mark">FO</div>
       <h1>The Front Office</h1>
       <p>Run a football club. Everything but the ninety minutes on Sunday.</p>
+      <p class="tiny dim" style="margin-top:6px">v${APP_VERSION}</p>
     </div>
     <div class="menu-acts">
       ${s?`<button class="btn primary big full" data-act="menucontinue">
