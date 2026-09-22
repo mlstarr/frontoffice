@@ -313,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--tea
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.08";
+const APP_VERSION = "0.09";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -3848,7 +3848,9 @@ function generateDraftClass(){
     S.prospects.push(p.id);
   }
   repriceBoard(false);
-  // per-prospect stable evaluation error so your grade drifts toward truth, not jitters
+  // per-prospect stable evaluation error — how far a scouting department's
+  // own conclusion sits from the truth, fixed once and never re-rolled by
+  // more hours. See myGrade() for how this plays out.
   S.scout={};
   for(const id of S.prospects){
     S.scout[id]={k:0,notes:[],acts:{},err:gauss(0,1),scoutIds:[],medical:false,interview:false,workout:false};
@@ -3887,14 +3889,26 @@ function myGrade(pid){
   const k=r.k;
   // how far you trust your own eyes over the league's board
   const w = Math.pow(k/100,0.62);
-  // even a finished workup leaves real uncertainty — nobody scouts a man perfectly
-  const sd = 4.0 + 13*Math.pow(1-k/100,1.20);
   const scouts=r.scoutIds.map(i=>S.teams[S.userTeam].scouts.find(s=>s.id===i)).filter(Boolean);
   const bias = scouts.length? avg(scouts.map(s=>scoutBiasFor(p,s))) : 0;
-  const own = p.hidden.trueGrade + r.err*sd + bias*(1-k/240);
+  // How far your own read sits from the truth is set by who's doing the
+  // work — their eye, their fit for this region and this kind of prospect
+  // — not by how many hours get poured in. This used to shrink the same
+  // fixed per-prospect error against a shrinking spread as k rose, so
+  // every workup was on rails toward the true number no matter who was
+  // running it — real scouting has no such guarantee. More hours now buy
+  // confidence that your department's own conclusion is right, not
+  // correctness itself: a mediocre department can grind a man to full
+  // knowledge and stay completely, confidently wrong about him. A region
+  // match narrows this some — your own guys, not a wire report — but even
+  // an elite department has a real floor of pure evaluation error.
+  const scoutAcc = scouts.length? avg(scouts.map(s=>s.acc)) : 55;
+  const regionHit = scouts.length && scouts.some(s=>s.region&&s.region===p.draft.ctx.region);
+  const ownSD = clamp(2.4 - (scoutAcc-55)*0.022 - (regionHit?0.35:0), 0.8, 3.8);
+  const own = p.hidden.trueGrade + r.err*ownSD + bias;
   const est = own*w + p.draft.consensus*(1-w);
   const ana = analyticsEdge(S.teams[S.userTeam]);
-  const band = (3.2 + 17*Math.pow(1-k/100,1.15))*(1-0.35*ana);
+  const band = (5.8 + 15*Math.pow(1-k/100,1.15))*(1-0.35*ana);
   return {est:clamp(est,30,99), band, k, lo:clamp(est-band,28,99), hi:clamp(est+band,30,99)};
 }
 const ACTIONS={
@@ -4990,8 +5004,10 @@ const SCREENS_SCOUT=function(){
   if(V.scoutOnly==="scouted") list=list.filter(p=>S.scout[p.id].k>0);
   if(V.scoutOnly==="gems") list=list.filter(p=>{const g=myGrade(p.id);
     return S.scout[p.id].k>=25 && g.est-p.draft.consensus>=4;});
+  const boardOrder=own_notice=>{ const order=boardTop(); const idx=new Map(order.map((id,i)=>[id,i])); return idx; };
   const sortFn={
     board:(a,b)=>a.draft.rank-b.draft.rank,
+    myboard:(a,b)=>{ const idx=boardOrder(); return (idx.get(a.id)??9999)-(idx.get(b.id)??9999); },
     mine:(a,b)=>myGrade(b.id).est-myGrade(a.id).est,
     gap:(a,b)=>(myGrade(b.id).est-b.draft.consensus)*(S.scout[b.id].k>15?1:0)
               -(myGrade(a.id).est-a.draft.consensus)*(S.scout[a.id].k>15?1:0),
@@ -5037,6 +5053,7 @@ const SCREENS_SCOUT=function(){
       <div class="row wrap">
         <select data-act="ssort">
           <option value="board" ${V.scoutSort==="board"?"selected":""}>Sort: consensus board</option>
+          <option value="myboard" ${V.scoutSort==="myboard"?"selected":""}>Sort: my board</option>
           <option value="mine" ${V.scoutSort==="mine"?"selected":""}>Sort: my grade</option>
           <option value="gap" ${V.scoutSort==="gap"?"selected":""}>Sort: value gap</option>
           <option value="known" ${V.scoutSort==="known"?"selected":""}>Sort: most scouted</option>
@@ -10669,6 +10686,14 @@ const STAFF_JOBS={
         .sort((a,b)=>(boardGrade(S.players[b])+needScore(t,S.players[b].pos)*0.3)
                     -(boardGrade(S.players[a])+needScore(t,S.players[a].pos)*0.3))
         .slice(0,25);
+      // This was updating a ranking that only ever mattered later, at the
+      // actual draft's "let the room decide" button — nothing on the
+      // scouting screen itself was sorted by it, so clicking this and
+      // looking at the same table you were already on showed no change at
+      // all. Switching the view to it directly means the result is the
+      // very next thing you see, not something you'd have to already know
+      // to go dig for in a sort menu.
+      V.scoutSort="myboard";
       return "The board is ranked. Move anyone you disagree with."; }}
 };
 function staffButton(job,cls){
@@ -10784,6 +10809,14 @@ const STAFF_TASKS=[
    run:()=>{ bigBoard();
      const top=S.prospects.slice().sort((a,b)=>boardGrade(S.players[b])-boardGrade(S.players[a])).slice(0,12);
      S.board.ids=top;
+     // This lived in the general staff panel, not the scouting screen
+     // itself, so running it changed the list silently — there was
+     // nowhere the person was already looking that would show the
+     // result, which is exactly what made a working button look like
+     // it did nothing. This one now takes them to the board it just
+     // built, the same fix already applied to its twin on the scouting
+     // screen directly.
+     V.screen="scout"; V.scoutSort="myboard";
      return `${top.length} men placed on the board.`; }}
 ];
 function staffTaskPanel(){
