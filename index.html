@@ -442,11 +442,12 @@ const POS = ["QB","RB","WR","TE","LT","LG","C","RG","RT","EDGE","DT","LB","CB","
 const POSGROUP = {QB:"o",RB:"o",WR:"o",TE:"o",LT:"o",LG:"o",C:"o",RG:"o",RT:"o",
   EDGE:"d",DT:"d",LB:"d",CB:"d",S:"d",K:"s",P:"s"};
 const OL = ["LT","LG","C","RG","RT"];
-const ATTRS = ["spd","acc","agi","str","jmp","awr","thp","tha","cth","rte","elu","trk","rbk","pbk","tak","cov","prs","dur"];
+const ATTRS = ["spd","acc","agi","str","jmp","awr","thp","tha","cth","rte","elu","trk","rbk","pbk","tak","cov","prs","dur","kpw","kac"];
 const ATTRNAME = {spd:"Speed",acc:"Acceleration",agi:"Agility",str:"Strength",jmp:"Jumping",
   awr:"Awareness",thp:"Arm strength",tha:"Accuracy",cth:"Hands",rte:"Route running",
   elu:"Elusiveness",trk:"Power running",rbk:"Run blocking",pbk:"Pass blocking",
-  tak:"Tackling",cov:"Coverage",prs:"Pass rush",dur:"Durability"};
+  tak:"Tackling",cov:"Coverage",prs:"Pass rush",dur:"Durability",
+  kpw:"Kick power",kac:"Kick accuracy"};
 
 // which attributes are meaningful for each position (shown on player cards)
 const POSATTRS = {
@@ -462,7 +463,7 @@ const POSATTRS = {
   LB:["tak","spd","cov","awr","str","prs","dur"],
   CB:["cov","spd","acc","agi","awr","jmp","tak","dur"],
   S:["cov","tak","spd","awr","str","jmp","dur"],
-  K:["thp","tha","awr","dur"],P:["thp","tha","awr","dur"]
+  K:["kpw","kac","awr","dur"],P:["kpw","kac","awr","dur"]
 };
 
 // overall weights
@@ -481,8 +482,8 @@ const OVRW = {
   LB:{tak:.22,cov:.18,awr:.17,spd:.15,str:.12,prs:.10,dur:.06},
   CB:{cov:.34,spd:.20,acc:.12,agi:.11,awr:.11,jmp:.05,tak:.04,dur:.03},
   S: {cov:.26,tak:.20,awr:.19,spd:.15,str:.09,jmp:.06,dur:.05},
-  K: {thp:.45,tha:.40,awr:.10,dur:.05},
-  P: {thp:.45,tha:.40,awr:.10,dur:.05}
+  K: {kpw:.45,kac:.40,awr:.10,dur:.05},
+  P: {kpw:.45,kac:.40,awr:.10,dur:.05}
 };
 
 // roster construction targets
@@ -678,7 +679,7 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;","
    ============================================================ */
 
 const LOWA = {spd:50,acc:52,agi:50,str:55,jmp:50,awr:50,thp:25,tha:25,cth:35,rte:30,
-  elu:45,trk:45,rbk:35,pbk:35,tak:40,cov:30,prs:35,dur:75};
+  elu:45,trk:45,rbk:35,pbk:35,tak:40,cov:30,prs:35,dur:75,kpw:25,kac:25};
 function baseA(pos){
   const b=Object.assign({},LOWA), s=x=>Object.assign(b,x);
   switch(pos){
@@ -694,7 +695,7 @@ function baseA(pos){
     case "LB": return s({spd:80,acc:80,agi:76,str:74,jmp:66,awr:68,tak:82,cov:65,prs:58,dur:78});
     case "CB": return s({spd:91,acc:90,agi:88,str:50,jmp:80,awr:62,cth:55,cov:82,tak:52,dur:73});
     case "S":  return s({spd:86,acc:85,agi:80,str:60,jmp:74,awr:68,cth:52,cov:74,tak:74,dur:76});
-    case "K": case "P": return s({spd:50,acc:50,agi:50,str:55,awr:58,thp:64,tha:64,dur:88});
+    case "K": case "P": return s({spd:50,acc:50,agi:50,str:55,awr:58,kpw:72,kac:70,dur:88});
   }
   return b;
 }
@@ -11238,6 +11239,19 @@ function buildRosterPlayer(r){
   p.ht=Number(r.h)||p.ht; p.wt=Number(r.w)||p.wt;
   for(const k in r.r) if(ATTRS.includes(k)) p.a[k]=clamp(r.r[k],25,99);
   p.hidden=p.hidden||{};
+  // A kicker/punter's real leg is a hidden trait (kpow/kacc/ppow/pplace),
+  // separate from the kpw/kac shown on his card. makePlayer() rolled those
+  // hidden numbers randomly before we got here — if the roster file carries
+  // real ratings for this man, they should drive his actual kicks, not just
+  // his displayed card.
+  if(r.p==="K"&&r.r){
+    if(r.r.kpw!==undefined) p.hidden.kpow=clamp(Math.round(r.r.kpw),25,99);
+    if(r.r.kac!==undefined) p.hidden.kacc=clamp(Math.round(r.r.kac),25,99);
+  }
+  if(r.p==="P"&&r.r){
+    if(r.r.kpw!==undefined) p.hidden.ppow=clamp(Math.round(r.r.kpw),25,99);
+    if(r.r.kac!==undefined) p.hidden.pplace=clamp(Math.round(r.r.kac),25,99);
+  }
   p.hidden.pot=rosterCeiling(p,r);
   p.hidden.dev=devFromRoll(rnd());
   // Discipline is not part of the roster OVR scale. If supplied, preserve it;
