@@ -313,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--tea
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.07";
+const APP_VERSION = "0.08";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -1249,7 +1249,19 @@ function assignDefensiveRoles(t){
   men.forEach(refreshDefRoleRatings);
   const db=men.filter(p=>p.pos==='CB'||p.pos==='S');
   const used=new Set();
+  // A user override sticks until cleared or the man himself can't go —
+  // otherwise this always just re-ran the algorithm's own preference every
+  // week, and there was no way to actually tell the coordinator "no, I want
+  // him at nickel," only to watch him get overruled every single Monday.
+  const manual=t.defRolesManual||{};
+  const takeManual=(role)=>{
+    const id=manual[role]; if(!id) return null;
+    const p=db.find(x=>x.id===id&&!used.has(x.id));
+    if(p) used.add(p.id);
+    return p||null;
+  };
   const pick=(role,preferPos)=>{
+    const forced=takeManual(role); if(forced) return forced;
     const candidates=db.filter(p=>!used.has(p.id)).sort((a,b)=>defensiveRoleScore(b,role)-defensiveRoleScore(a,role));
     let p=candidates.find(x=>x.pos===preferPos)||candidates[0]||null;
     if(p) used.add(p.id); return p;
@@ -1257,14 +1269,15 @@ function assignDefensiveRoles(t){
   const nb=pick('NB','CB');
   const fs=pick('FS','S');
   const ss=pick('SS','S');
+  const forcedCB1=takeManual('CB1'), forcedCB2=takeManual('CB2');
   const outside=db.filter(p=>!used.has(p.id)).sort((a,b)=>{
     const sa=(a.pos==='CB'?3:0)+a.a.cov*.35+a.a.spd*.2+a.a.acc*.1+a.a.awr*.15+a.a.agi*.1+a.a.tak*.1;
     const sb=(b.pos==='CB'?3:0)+b.a.cov*.35+b.a.spd*.2+b.a.acc*.1+b.a.awr*.15+b.a.agi*.1+b.a.tak*.1;
     return sb-sa;
   });
-  const cb1=outside[0]||null, cb2=outside[1]||null;
+  const cb1=forcedCB1||outside[0]||null, cb2=forcedCB2||outside[(forcedCB1?0:1)]||null;
   if(cb1) used.add(cb1.id); if(cb2) used.add(cb2.id);
-  const bigNickel=(db.filter(p=>!used.has(p.id)&&p.pos==='S').sort((a,b)=>functionalOVR(b,'BN')-functionalOVR(a,'BN'))[0])||null;
+  const bigNickel=takeManual('bigNickel')||(db.filter(p=>!used.has(p.id)&&p.pos==='S').sort((a,b)=>functionalOVR(b,'BN')-functionalOVR(a,'BN'))[0])||null;
   t.defRoles={NB:nb?.id||null,FS:fs?.id||null,SS:ss?.id||null,CB1:cb1?.id||null,CB2:cb2?.id||null,bigNickel:bigNickel?.id||null};
   t.defRoleOVR={};
   for(const role of ['NB','FS','SS','BN']){ const p=role==='BN'?bigNickel:(role==='NB'?nb:role==='FS'?fs:ss); if(p) t.defRoleOVR[role]=functionalOVR(p,role); }
@@ -4686,36 +4699,77 @@ const SCREENS_TEAM=function(){
     // to run the games themselves. It just never showed up anywhere the
     // person could see it, so the chart only ever showed generic CB1/CB2/CB3
     // and S1/S2/S3, no matter how differently two schemes actually used them.
+    // This replaces those generic lists outright rather than sitting beside
+    // them — the scheme role IS the depth chart position now, the same way
+    // it always should have worked; the generic CB/S label still shows next
+    // to a name only when it isn't his primary position.
     assignDefensiveRoles(t);
     const roleRow=(label,role,pos)=>{
       const p=defensiveRolePlayer(t,role);
-      if(!p) return `<tr><td colspan="3" class="dim small">${label} — nobody fits</td></tr>`;
-      return `<tr><td class="dim small" style="width:80px">${label}</td>
+      const manual=t.defRolesManual||{};
+      const eligible=own?t.roster.map(id=>S.players[id]).filter(x=>x&&!x.retired&&(x.pos==="CB"||x.pos==="S")):[];
+      const picker=own?`<select data-act="setrole" data-arg="${role}" style="width:100%;font-size:11.5px;margin-top:3px">
+          <option value="">${manual[role]?"— let the coordinator choose —":"— coordinator's own choice —"}</option>
+          ${eligible.map(x=>`<option value="${x.id}" ${manual[role]===x.id?"selected":""}>${esc(x.pos)} ${esc(x.f)} ${esc(x.l)} — ${Math.round(functionalOVR(x,role==="CB1"||role==="CB2"?"NB":role))} here</option>`).join("")}
+        </select>`:"";
+      if(!p) return `<tr><td colspan="3" class="dim small">${label} — nobody fits${picker?`<br>${picker}`:""}</td></tr>`;
+      return `<tr><td class="dim small" style="width:80px">${label}${manual[role]?' <span class="tag gold" title="Your call, not the coordinator\'s">set</span>':""}</td>
         <td class="click" data-act="player" data-arg="${p.id}"><b>${esc(p.l)}</b>
           ${p.pos!==pos?` <span class="tag">${p.pos}</span>`:""}
-          <div class="tiny dim">${esc(p.f)} · ${p.age}</div></td>
+          <div class="tiny dim">${esc(p.f)} · ${p.age}</div>${picker}</td>
         <td class="n ovrcell">${Math.round(functionalOVR(p,role==="CB1"||role==="CB2"?"NB":role))}</td></tr>`;
     };
-    const dbUsed=new Set(["NB","FS","SS","CB1","CB2","bigNickel"].map(r=>t.defRoles&&t.defRoles[r]).filter(Boolean));
-    const dbAddOptions=own?t.roster.map(id=>S.players[id]).filter(p=>p&&!p.retired&&(p.pos==="CB"||p.pos==="S")&&!dbUsed.has(p.id)):[];
+    const hasManual=t.defRolesManual&&Object.keys(t.defRolesManual).length;
     const dbSection=`<div class="depthgrp"><div class="row spread depthhead">
         <span>Defensive backs <b class="small">by scheme role, not raw position</b></span>
-        <span class="tiny dim">${(t.staff.DC&&t.staff.DC.scheme)||"base"}</span></div>
+        <span class="tiny dim">${TEAM_SCHEMES.DC[schemeOf(t,"DC")]?.name||"Base"}</span></div>
         <table class="depthtable"><tbody>
           ${roleRow("Corner 1","CB1","CB")}${roleRow("Corner 2","CB2","CB")}
           ${roleRow("Nickel","NB","CB")}${roleRow("Free safety","FS","S")}
           ${roleRow("Strong safety","SS","S")}
           ${defensiveRolePlayer(t,"bigNickel")?roleRow("Big nickel","bigNickel","S"):""}
         </tbody></table>
-        <div class="pb tight small muted" style="padding:6px 10px">Chosen fresh each week from every CB and S on the roster — best fit for each role, not just best overall. Injury or a holdout bumps the next man in line.</div>
-        ${own&&dbAddOptions.length?`<div class="pb tight small muted" style="padding:0 10px 8px">Not seeing someone you expected? He's a CB or S already claimed by another role above — check the generic CB/S lists below to reorder who the scheme prefers.</div>`:""}
+        <div class="pb tight small muted" style="padding:6px 10px">Chosen fresh each week from every CB and S on the roster — best fit for each role, not raw overall. Injury or a holdout bumps the next man in line. Pick someone yourself below any name to override that read; leave it on the coordinator's choice otherwise.
+        ${own&&hasManual?` <button class="mini" data-act="clearroles">Reset all to auto</button>`:""}</div>
       </div>`;
+    // A generic "EDGE"/"DT"/"LB" is really a different job depending on the
+    // front the coordinator runs — a 3-4's edge rusher is functionally an
+    // outside linebacker, and its nose tackle isn't the same assignment as
+    // a 4-3's two even tackles. The underlying position and rating don't
+    // change, only what the chart calls each slot and how the front's
+    // labeled top to bottom, matching what's actually different between a
+    // 3-4 and a 4-3 rather than showing the same three generic groups
+    // regardless of scheme.
+    const front=frontLabelsFor(t);
+    const frontGroup=(pos)=>{
+      const d=(t.depth[pos]||[]).map(id=>S.players[id]).filter(Boolean);
+      const labels=front[pos]||[];
+      const rows=d.map((p,i)=>`<tr class="${i===0?"starter":""}">
+        <td class="dim small" style="width:110px">${labels[i]||`${POSNAME[pos]||pos} ${i+1}`}</td>
+        <td class="click" data-act="player" data-arg="${p.id}">
+          <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
+            :p.holdout?' <span class="tag warn">held out</span>':""}
+          ${p.pos!==pos?` <span class="tag">${p.pos}</span>`:""}
+          <div class="tiny dim">${esc(p.f)} · ${p.age} · ${p.pos!==pos
+            ? "out of position" : fitWord(schemeFit(p))}</div></td>
+        <td class="n ovrcell ${p.pos!==pos?"warn":""}">${ovrAt(p,pos)}</td>
+        <td style="width:78px" class="row" style="gap:2px">${own&&i>0?`<button class="mini" data-act="promote" data-arg="${pos}" data-arg2="${p.id}">▲</button>`:""}${
+          own?`<button class="mini" data-act="dropdepth" data-arg="${pos}" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
+      </tr>`).join("");
+      return `<div class="depthgrp"><div class="row spread depthhead">
+        <span>${posTag(pos)} <b class="small">${POSNAME[pos]||pos}</b></span>
+        <span class="tiny dim">${d.length} deep</span></div>
+        ${d.length?`<table class="depthtable"><tbody>${rows}</tbody></table>`
+              :"<div class='pb muted small'>Nobody here.</div>"}
+        ${addSelectFor(pos,d)}</div>`;
+    };
     body=`<div class="pb small muted">${own
       ? "Tap a name to move him up the chart. The order here is the order they play in. A man can hold a spot at more than one position — a tight end who's also your fourth receiver doesn't have to give one up, since they were never on the field at the same time anyway."
       : "Their order of preference at each spot."}</div>`
       +(own?`<div class="pb"><button class="btn" data-act="stafftask" data-arg="depth">Let the coaches set it</button></div>`:"")
       +dbSection
-      +POS.filter(pos=>pos!=="CB"&&pos!=="S").map(pos=>{
+      +["EDGE","DT","LB"].map(frontGroup).join("")
+      +POS.filter(pos=>pos!=="CB"&&pos!=="S"&&pos!=="EDGE"&&pos!=="DT"&&pos!=="LB").map(pos=>{
       const d=(t.depth[pos]||[]).map(id=>S.players[id]).filter(Boolean);
       return `<div class="depthgrp"><div class="row spread depthhead">
         <span>${posTag(pos)} <b class="small">${POSNAME[pos]||pos}</b></span>
@@ -4723,17 +4777,7 @@ const SCREENS_TEAM=function(){
         ${d.length?`<table class="depthtable"><tbody>${depthRowsFor(pos,d)}</tbody></table>`
               :"<div class='pb muted small'>Nobody here.</div>"}
         ${addSelectFor(pos,d)}</div>`;
-    }).join("")
-      +`<div class="depthgrp"><div class="row spread depthhead">
-        <span>${posTag("CB")} <b class="small">CB — full list</b></span>
-        <span class="tiny dim">${(t.depth.CB||[]).length} deep</span></div>
-        ${(t.depth.CB||[]).length?`<table class="depthtable"><tbody>${depthRowsFor("CB",(t.depth.CB||[]).map(id=>S.players[id]).filter(Boolean))}</tbody></table>`:"<div class='pb muted small'>Nobody here.</div>"}
-        ${addSelectFor("CB",(t.depth.CB||[]).map(id=>S.players[id]).filter(Boolean))}</div>`
-      +`<div class="depthgrp"><div class="row spread depthhead">
-        <span>${posTag("S")} <b class="small">S — full list</b></span>
-        <span class="tiny dim">${(t.depth.S||[]).length} deep</span></div>
-        ${(t.depth.S||[]).length?`<table class="depthtable"><tbody>${depthRowsFor("S",(t.depth.S||[]).map(id=>S.players[id]).filter(Boolean))}</tbody></table>`:"<div class='pb muted small'>Nobody here.</div>"}
-        ${addSelectFor("S",(t.depth.S||[]).map(id=>S.players[id]).filter(Boolean))}</div>`;
+    }).join("");
   } else {
     const ps=t.roster.map(id=>S.players[id]).filter(p=>p&&p.stats.gp);
     const tbl=(title,key,rows,cols,defCol)=>{
@@ -5573,6 +5617,21 @@ const ACT={
     const d=t.depth[pos]; if(!d) return;
     const i=d.indexOf(+pid);
     if(i>0){ d[i]=d[i-1]; d[i-1]=+pid; t.depthManual=true; render(); }
+  },
+  setrole:(role,pid)=>{
+    const t=S.teams[S.userTeam];
+    t.defRolesManual=t.defRolesManual||{};
+    if(!pid){ delete t.defRolesManual[role]; }
+    else t.defRolesManual[role]=+pid;
+    assignDefensiveRoles(t);
+    render();
+  },
+  clearroles:()=>{
+    const t=S.teams[S.userTeam];
+    t.defRolesManual={};
+    assignDefensiveRoles(t);
+    toast("Defensive back roles back to the coordinator's own read.");
+    render();
   },
   adddepth:(pos,pid)=>{
     if(!pid) return;
@@ -7488,6 +7547,24 @@ const TEAM_SCHEMES={
 function schemeOf(t,side){
   const c=t&&t.staff&&t.staff[side];
   return c&&c.scheme ? c.scheme : (side==="OC"?"westcoast":"cover2");
+}
+/* What a generic DT/EDGE/LB group is actually called depends on the front
+   the defensive coordinator runs — a 3-4 makes an "EDGE" an outside
+   linebacker and puts a nose tackle at the front of the DT group; a 4-3
+   makes the same two spots a defensive end and two down tackles. The
+   underlying rating and the player himself don't change, only what the
+   chart calls the job and how many of each the front actually starts —
+   this was showing the same generic three groups no matter which scheme
+   a team actually ran. Cover 2 and man press are secondary philosophies,
+   not fronts, so they fall back to the standard 4-3 grouping since neither
+   dictates a specific front by itself. */
+const FRONT_LABELS={
+  base34:{DT:["Nose tackle","Defensive end","Defensive end"], EDGE:["Outside linebacker","Outside linebacker"], LB:["Inside linebacker","Inside linebacker"]},
+  attack43:{DT:["Defensive tackle","Defensive tackle"], EDGE:["Defensive end","Defensive end"], LB:["Middle linebacker","Outside linebacker","Outside linebacker"]}
+};
+function frontLabelsFor(t){
+  const sc=schemeOf(t,"DC");
+  return FRONT_LABELS[sc]||FRONT_LABELS.attack43;
 }
 function schemeFit(p){
   const t=p.teamId!==null&&p.teamId!==undefined?S.teams[p.teamId]:null;
