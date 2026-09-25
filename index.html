@@ -3242,10 +3242,29 @@ function applyDelta(p,d){
   const w=OVRW[p.pos];
   const table = d<0 ? ATTR_AGE_DECAY : ATTR_AGE_GROWTH;
   for(const k in w){
+    if(k==="awr") continue; // awareness runs on its own age curve, see awarenessAging()
     const mult = table[k]!==undefined ? table[k] : 1;
     p.a[k]=c99(p.a[k]+d*mult);
   }
   p.ovr=computeOVR(p.pos,p.a);
+}
+// Awareness doesn't track a player's overall trajectory the way physical
+// tools do — a declining 33-year-old can still be getting SHARPER even as
+// his legs go. This runs independently of applyDelta's signed d, so the two
+// can move in opposite directions in the same season. It keeps rising
+// through most of a career, roughly flattens in the low 30s, and only
+// actually declines at genuinely advanced age.
+function awarenessAging(p){
+  const age=p.age;
+  let d;
+  if(age<=23) d=rf(1.0,2.2);
+  else if(age<=28) d=rf(0.4,1.3);
+  else if(age<=32) d=rf(-0.1,0.7);
+  else if(age<=35) d=rf(-0.5,0.4);
+  else d=rf(-1.6,-0.2);           // really old age: the one place it dips
+  if(hasTrait(p,"film")) d+=0.4;
+  if(hasTrait(p,"coasts")) d-=0.3;
+  return d;
 }
 function progressPlayer(p,team){
   const coachDev = team&&team.staff.HC ? (team.staff.HC.dev*.5+(team.staff[POSGROUP[p.pos]==="o"?"OC":"DC"]||{dev:60}).dev*.5) : 60;
@@ -3294,7 +3313,16 @@ function progressPlayer(p,team){
   const before=p.ovr;
   p.lastOvr=before;
   applyDelta(p,Math.round(d*10)/10);
+  p.a.awr=c99(p.a.awr+Math.round(awarenessAging(p)*10)/10);
+  p.ovr=computeOVR(p.pos,p.a);
   const gained=p.ovr-before;
+  // a full, persistent trail of every season's move — not just the single
+  // most-recent value lastOvr already tracked — so there's somewhere to
+  // actually see what happened to a player over his career, not just a
+  // one-time top-4/top-3 blip in the year-end recap
+  p.ovrHistory=p.ovrHistory||[];
+  p.ovrHistory.push({year:S.year, before, after:p.ovr, delta:Math.round(gained*10)/10});
+  if(p.ovrHistory.length>25) p.ovrHistory.shift();  // cap so long careers don't bloat the save
   applyPotentialShift(p,team,gained);
   if(team) staffNoticeSynergies(p,team);
   return gained;
@@ -4630,7 +4658,7 @@ const ROSTER_GROUPS={
 const SCREENS_TEAM=function(){
   const t=S.teams[V.viewTeam!==null?V.viewTeam:S.userTeam];
   const own=t.id===S.userTeam;
-  const tabs=[["roster","Roster"],["depth","Depth chart"],["reserve","Reserve"],["stats","Stats"]];
+  const tabs=[["roster","Roster"],["depth","Depth chart"],["reserve","Reserve"],["progress","Progression"],["stats","Stats"]];
   let body="";
   if(V.teamTab==="roster"){
     const grp=V.rosterGroup||"all";
@@ -4686,6 +4714,33 @@ const SCREENS_TEAM=function(){
         <td>${own?`<button class="mini" data-act="promoteps" data-arg="${p.id}">Promote</button>
           <button class="mini" data-act="cutps" data-arg="${p.id}">Release</button>`:""}</td></tr>`).join("")}
         </tbody></table>`:`<div class="pb muted">The squad is empty. Sign young free agents to it from the market.</div>`}`;
+  } else if(V.teamTab==="progress"){
+    const ps=t.roster.map(id=>S.players[id]).filter(p=>p&&p.ovrHistory&&p.ovrHistory.length);
+    const latestYear=Math.max(0,...ps.map(p=>p.ovrHistory[p.ovrHistory.length-1].year));
+    let rows=ps.map(p=>{
+      const h=p.ovrHistory[p.ovrHistory.length-1];
+      return {p, year:h.year, before:h.before, after:h.after, delta:h.delta};
+    });
+    rows=applySort("progress",rows,{
+      pos:r=>-POS.indexOf(r.p.pos), name:r=>r.p.l, age:r=>r.p.age,
+      before:r=>r.before, after:r=>r.after, delta:r=>r.delta
+    },"delta");
+    body=`<div class="pb small muted">Every player's move from his last progression pass —
+        ${ps.length?`most recently ${latestYear}`:"nothing's run yet; this fills in after your first offseason"}.
+        Click anyone to see his full year-by-year trail.</div>
+      <div class="scroll"><table><thead><tr>
+        ${sortTH("progress","pos","Pos")}${sortTH("progress","name","Player","","asc")}
+        ${sortTH("progress","age","Age","n")}${sortTH("progress","before","Was","n")}
+        ${sortTH("progress","after","Now","n")}${sortTH("progress","delta","Δ","n",null,"Change from his last progression pass")}</tr></thead>
+      <tbody>${rows.map(r=>`<tr class="click" data-act="player" data-arg="${r.p.id}">
+        <td>${posTag(r.p.pos)}</td>
+        <td>${esc(r.p.f[0])}. ${esc(r.p.l)}</td>
+        <td class="n">${r.p.age}</td>
+        <td class="n dim">${r.before}</td>
+        <td class="n ovr">${r.after}</td>
+        <td class="n ${r.delta>0?"good":r.delta<0?"red":"dim"}">${r.delta>0?"+":""}${r.delta}</td>
+        </tr>`).join("")}</tbody></table></div>
+      ${ps.length?"":`<div class="pb muted">No progression history yet — this fills in after the roster's first offseason.</div>`}`;
   } else if(V.teamTab==="depth"){
     const depthRowsFor=(pos,d)=>d.map((p,i)=>`<tr class="${i===0?"starter":""}">
         <td class="n dim" style="width:26px">${i+1}</td>
@@ -5211,6 +5266,17 @@ function playerSheet(pid){
     ${p.injury>0?`<div class="panel"><div class="pb"><span class="tag red">Out ${p.injury} weeks</span>
       <span class="small"> ${esc(p.injDesc)}</span></div></div>`:""}
     <div class="panel"><div class="ph"><h3>Attributes</h3></div><div class="pb stack">${attrs}</div></div>
+    ${(()=>{
+      const h=p.ovrHistory;
+      if(!h||!h.length) return "";
+      const rows=h.slice().reverse().map(x=>`<tr><td class="dim small">${x.year}</td>
+        <td class="n dim">${x.before}</td><td class="n ovr">${x.after}</td>
+        <td class="n ${x.delta>0?"good":x.delta<0?"red":"dim"}">${x.delta>0?"+":""}${x.delta}</td></tr>`).join("");
+      return `<div class="panel"><div class="ph"><h3>Rating history</h3>
+        <span class="sub">${h.length} season${h.length>1?"s":""} tracked</span></div>
+        <div class="pb tight"><table><thead><tr><th>Year</th><th class="n">Was</th>
+          <th class="n">Now</th><th class="n">Δ</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    })()}
     ${(()=>{ const ct=contractTable(p); return ct?`<div class="panel">${ct}</div>`:""; })()}
     ${confidenceLine(p)}
     ${numbers?`<div class="panel"><div class="ph"><h3>Production</h3>
@@ -5295,23 +5361,30 @@ function draftPanel(){
   const mine=pk.team===S.userTeam;
   const t=S.teams[S.userTeam];
   const recent=S.draftOrder.slice(Math.max(0,S.draftIdx-6),S.draftIdx).reverse();
+  const targets=mine?draftTargets(t,4):[];
   let board="";
   if(mine){
+    const grp=V.draftGrp||"all";
     const list=S.prospects.map(id=>S.players[id])
+      .filter(p=>ROSTER_GROUPS[grp].includes(p.pos))
       .sort((a,b)=>myGrade(b.id).est-myGrade(a.id).est).slice(0,14);
-    board=`<table><thead><tr><th>Bd</th><th>Prospect</th><th class="n">Our grade</th><th></th></tr></thead><tbody>
+    board=`<div class="chips">${[["all","All"],["off","Offense"],["def","Defense"],["st","Specialists"]]
+        .map(([k,l])=>`<button class="chip" aria-pressed="${grp===k}" data-act="draftgrp" data-arg="${k}">${l}</button>`).join("")}</div>
+    <table><thead><tr><th title="Where this prospect sits on the public consensus board">Bd</th><th>Prospect</th>
+      <th class="n" title="Our own scout grade for him — a dash means we haven't scouted him enough to have one yet">Our grade</th><th></th></tr></thead><tbody>
       ${list.map(p=>{const g=myGrade(p.id),k=S.scout[p.id].k;
-        return `<tr><td class="n dim">${p.draft.rank}</td>
-        <td class="click" data-act="prospect" data-arg="${p.id}">${posTag(p.pos)} ${esc(p.l)}
+        const need=targets.includes(p.pos);
+        return `<tr class="${need?"good":""}"><td class="n dim">${p.draft.rank}</td>
+        <td class="click" data-act="prospect" data-arg="${p.id}">${posTag(p.pos)} ${esc(p.l)}${need?' <span class="tiny tag green">need</span>':""}
           <br><span class="dim tiny">${esc(p.draft.ctx.school)}</span></td>
-        <td class="n">${k>=18?Math.round(g.est):"–"}<br><span class="dim tiny">${k>=18?"±"+Math.round(g.band):"unseen"}</span></td>
+        <td class="n">${k>=18?Math.round(g.est):"–"}<br><span class="dim tiny">${k>=18?"±"+Math.round(g.band):"unscouted"}</span></td>
         <td><button class="btn sm" data-act="pick" data-arg="${p.id}">Pick</button></td></tr>`;}).join("")}
     </tbody></table>`;
   }
   return `<div class="panel">
     <div class="ph"><h3>${mine?"You're on the clock":"Draft in progress"}</h3>
       <span class="sub">${ordinal(pk.overall)} overall · round ${pk.round}</span></div>
-    ${mine?`<div class="pb tight small muted">Worth targeting: ${draftTargets(t,4).join(", ")}</div>
+    ${mine?`<div class="pb tight small muted">Worth targeting: ${targets.join(", ")||"nothing urgent"} — rows below marked <span class="tag green tiny">need</span> match one of these.</div>
       <div class="pb tight">${board}</div>
       <div class="pb"><button class="btn full" data-act="bestavail">Let the room decide</button></div>
       ${(()=>{
@@ -5344,11 +5417,14 @@ function draftPanel(){
                ${ordinal(o)}${q.ok?(q.extra.length?` · ${q.extra.length} pick${q.extra.length>1?"s":""}`:" · even"):" · short"}</button>`;
            }).join(" ")}</div></div>`;})()}
        <button class="btn primary full" data-act="advance">Continue the draft</button></div>`}
-    ${recent.length?`<div class="pb tight"><table><tbody>${recent.map(x=>{
+    ${recent.length?`<div class="pb tight"><table><thead><tr><th></th><th></th><th></th>
+      <th class="n tiny dim" title="Steal: we'd have graded him much better than the room did. Reach: the opposite.">vs. consensus</th></tr></thead><tbody>${recent.map(x=>{
       const p=S.players[x.pid]; if(!p) return "";
       const gem=p.hidden.trueGrade-p.draft.consensus;
+      const gemTag=gem>=12?'<span class="tag green tiny">steal</span>':gem<=-12?'<span class="tag red tiny">reach</span>':"";
       return `<tr><td class="n dim">${x.overall}</td><td>${esc(S.teams[x.team].abbr)}</td>
-        <td class="click" data-act="player" data-arg="${p.id}">${posTag(p.pos)} ${esc(p.l)}</td></tr>`;}).join("")}
+        <td class="click" data-act="player" data-arg="${p.id}">${posTag(p.pos)} ${esc(p.l)}</td>
+        <td class="n">${gemTag}</td></tr>`;}).join("")}
       </tbody></table></div>`:""}
   </div>`;
 }
@@ -5625,6 +5701,7 @@ const ACT={
   boardadd:a=>{ bigBoard(); if(!S.board.ids.includes(+a)) S.board.ids.push(+a); render(); },
   rsearch:(a,b,ev)=>{V.rosterQ=ev.target.value;render();},
   fagroup:a=>{V.faGroup=a;render();},
+  draftgrp:a=>{V.draftGrp=a;render();},
   fasearch:(a,b,ev)=>{V.faQ=ev.target.value;render();},
   faall:()=>{V.faAll=true;render();},
   standview:a=>{V.standView=a;render();},
@@ -9486,7 +9563,7 @@ function runCarousel(){
       c.role="HC"; dest.staff.HC=c; delete t.staff[role];
       poached.push({name:c.name,from:t,to:dest,role});
       if(t.id===S.userTeam)
-        news(`${esc(c.name)} has been hired as head coach by ${dest.city}. Your ${role} chair is empty.`,"loss");
+        news(`${esc(c.name)} has been hired as head coach by ${dest.city}. Your ${role} chair is empty. ${staffBudgetLine(t,role)}`,"loss");
       else if(dest.id===S.userTeam)
         news(`You've hired ${esc(c.name)} away from ${t.city} as head coach.`,"signing");
     }
@@ -9567,6 +9644,16 @@ function enforceCap(only,opts){
   }
 }
 /* coaches age, retire, and eventually stop waiting for a job */
+/* shared by any coordinator/HC departure — what can he actually afford right now */
+function staffBudgetLine(t,role){
+  const cheapest=(S.staffMarket||[]).filter(x=>x.role===role)
+    .sort((a,b)=>a.asking-b.asking)[0];
+  if(!cheapest) return `Nobody's currently on the ${role} market — check back as the carousel plays out.`;
+  const afford=t.cash>=cheapest.asking;
+  return afford
+    ? `You have ${fmtM(t.cash)} on hand — the cheapest ${role} on the market wants ${fmtM(cheapest.asking)}.`
+    : `You have ${fmtM(t.cash)} on hand, which isn't enough for anyone currently on the market (cheapest wants ${fmtM(cheapest.asking)}). His salary is off your books now, so next season's cash will be freer — until then, the chair stays empty or you'll need to free up cash elsewhere.`;
+}
 function ageStaff(){
   const goneNames=[];
   for(const t of S.teams){
@@ -9585,7 +9672,7 @@ function ageStaff(){
         delete t.staff[role];
         goneNames.push(`${c.name} (${t.abbr} ${role})`);
         if(t.id===S.userTeam)
-          news(`${esc(c.name)} is retiring after ${c.age} years. The ${role} job is open.`,"info");
+          news(`${esc(c.name)} is retiring after ${c.age} years. The ${role} job is open. ${staffBudgetLine(t,role)}`,"info");
       }
     }
   }
