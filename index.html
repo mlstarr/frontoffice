@@ -313,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--tea
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.09";
+const APP_VERSION = "0.17";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -812,7 +812,6 @@ function makePlayer(pos,target,age,opts){
   if(pos==="K"||pos==="P") p.hidden.pot = Math.max(p.ovr, Math.min(p.hidden.pot, ri(74,88))); // specialists don't become superstars
   p.hidden.dev = opts.dev!==undefined?opts.dev:devFromRoll(rnd());
   p.hidden.wrk = c99(gauss(65,15));            // work ethic
-  p.hidden.inj = c99(gauss(100-p.a.dur,10));   // injury proneness
   p.hidden.chr = c99(gauss(68,16));            // character / locker room
   p.hidden.disc = c99(gauss(68,13));          // on-field discipline / foul avoidance
   // How gracefully HE ages, on top of what his position usually does. Two
@@ -821,8 +820,7 @@ function makePlayer(pos,target,age,opts){
   // rate); higher ages more gracefully, lower falls off a cliff earlier.
   p.hidden.agingCurve = c99(gauss(65,15));
   // Specialist / return traits are intentionally hidden: teams discover them through reps.
-  if(pos==="K") { p.hidden.kpow=c99(gauss(72,9)); p.hidden.kacc=c99(gauss(70,10)); p.hidden.kclutch=c99(gauss(68,12)); }
-  if(pos==="P") { p.hidden.ppow=c99(gauss(73,9)); p.hidden.phang=c99(gauss(70,9)); p.hidden.pplace=c99(gauss(69,11)); }
+  if(pos==="K") { p.hidden.kclutch=c99(gauss(68,12)); }
   if(["WR","RB","CB","S"].includes(pos)) {
     p.hidden.ret=c99(gauss(60 + (p.a.spd-65)*.18 + (p.a.agi-65)*.12,12));
     p.hidden.ball=c99(gauss(69,12));
@@ -2089,7 +2087,7 @@ function tryInjure(p,mult){
   // since a QB's workload is real, just physically different in kind.
   const touchesPerGame=((p.stats?.ra||0)+(p.stats?.tgt||0)+(p.stats?.pa||0)*0.3)/gamesPlayed;
   const workloadMult=clamp(1+(touchesPerGame-12)*0.018,0.85,1.45);
-  const base=0.165*mult*workloadMult*(0.55+p.hidden.inj/90);
+  const base=0.165*mult*workloadMult*(0.55+(100-p.a.dur)/90);
   if(rnd()<base){
     const sev=wpick([[1,42],[2,22],[3,12],[4,8],[6,7],[9,5],[14,3],[20,1]]);
     p.injury=sev; p.injWeek=S.week;
@@ -2113,14 +2111,9 @@ function weatherFumbleMult(weather){
   return m;
 }
 function fgProb(k,dist,weather,clutchCtx){
-  // This was reading k.a.thp/tha — generic attribute slots left over from the
-  // shared attribute-generation system, not this kicker's actual leg. His
-  // real accuracy and power (hidden.kacc/kpow) already correctly drive his
-  // range (fgRange) and his kickoffs — they just weren't the thing deciding
-  // whether his own field goal attempts went in. Measured: essentially zero
-  // correlation between the two (r=-0.2 across the league), so a kicker's
-  // real ability was having no bearing on his own make rate.
-  const skill=k?(k.hidden?.kacc*.6+k.hidden?.kpow*.4):55;
+  // real accuracy and power (his own kac/kpw) drive his range (fgRange) and
+  // his kickoffs directly now — no separate shadow copy of the same numbers.
+  const skill=k?(k.a.kac*.6+k.a.kpw*.4):55;
   // flat-ish inside 45, falls off a cliff beyond it, leg strength shifts the cliff
   // Measured against real per-distance NFL make rates: this curve was giving
   // 30-39 yard attempts 98.5% and 40-49 yard attempts 97.4% (real: ~88-90% and
@@ -2139,7 +2132,7 @@ function fgRange(k){                      // longest attempt a coach will send o
   // "longest attempt" of 59 was routinely being stretched to 69-71 as an
   // ordinary, non-desperation call. Real coaches essentially never send a
   // kicker out past the low 60s outside genuine desperation.
-  const skill=k?(k.hidden?.kpow*.55+k.hidden?.kacc*.45):55;
+  const skill=k?(k.a.kpw*.55+k.a.kac*.45):55;
   return 55+(skill-64)*0.42;
 }
 
@@ -2177,8 +2170,8 @@ function coverageUnit(t){
 function kickoffResult(kickTeam,recvTeam,spot,clockObj,log,qtr,weather,reason="kickoff") {
   const k=kickTeam?healthyStarter(kickTeam,"K",0):null;
   const ret=returnerFor(recvTeam,"KR");
-  const power=k?.hidden?.kpow||k?.a?.thp||70;
-  const placement=k?.hidden?.kacc||k?.a?.tha||68;
+  const power=k?.a?.kpw||70;
+  const placement=k?.a?.kac||68;
   // A kickoff travels further than any other kick and is exposed to the wind
   // for longer — a real headwind routinely turns a would-be touchback into a
   // live return, and a tailwind does the reverse. Cold, denser air costs a
@@ -2203,8 +2196,8 @@ function kickoffResult(kickTeam,recvTeam,spot,clockObj,log,qtr,weather,reason="k
 }
 function puntResult(puntTeam,recvTeam,ballOn,clockObj,log,qtr,weather){
   const pu=healthyStarter(puntTeam,"P",0), ret=returnerFor(recvTeam,"PR");
-  const power=pu?.hidden?.ppow||pu?.a?.thp||70, hang=pu?.hidden?.phang||pu?.a?.awr||68;
-  const place=pu?.hidden?.pplace||pu?.a?.awr||68;
+  const power=pu?.a?.kpw||70, hang=pu?.a?.kac||68;
+  const place=pu?.a?.kac||68;
   const dist=clamp(Math.round(45+(power-70)*.28+gauss(0,5)-(weather?.wind||0)*.10-(weather?.rain?1.5:0)-(weather?.cold?1.2:0)),25,66);
   const rush=teamUnits(recvTeam), protect=teamUnits(puntTeam);
   const blockP=clamp(.006+(rush.prs-protect.pblk)/2200+(weather?.wind&&Math.abs(weather.wind)>18?.001:0),.002,.022);
@@ -2709,7 +2702,7 @@ function* simGamePlay(g,neutral){
         track(rec);
         coverDef=receiverDefenderMatchup(rec,sho,SH[def].def);
         track(coverDef);
-        const recQ = rec? rec.a.cth*.5+rec.a.rte*.35+rec.a.spd*.15 : 45;
+        const recQ = rec? rec.a.cth*.45+rec.a.rte*.30+rec.a.spd*.12+(rec.a.jmp||60)*.13 : 45;
         const matchupCov=matchupCoverage(rec,coverDef);
         const rz = ballOn>=80?0.100:(ballOn>=58?0.030:0);
         let compBonus=0, intAdj=0;
@@ -2757,7 +2750,7 @@ function* simGamePlay(g,neutral){
         // coverage must lower offensive completion probability, not raise it.
         // The previous signs accidentally rewarded the defense with easier
         // completions while also suppressing interceptions.
-        const compP=clamp(.615+rz+compBonus+(passContext-50)/145+(matchupCov-50)/235+(oAdj-dAdj)/180-pressurePenalty
+        const compP=clamp(.615+rz+compBonus+(passContext-50)/145+(matchupCov-50)/235+(recQ-70)/280+(oAdj-dAdj)/180-pressurePenalty
           +shellDeepAdj-defPlan.coverage/150-defPlan.deep/220-Math.abs(weather.wind)*.0018-(weather.rain?.012:0)-(weather.cold?.008:0)
           -predictabilityCoveragePenalty+runSetupPassBonus,.20,.82);
         const risk = typeof planRisk==="function" ? planRisk(S.teams[off]) : 0;
@@ -2766,7 +2759,8 @@ function* simGamePlay(g,neutral){
         // Better coverage/deep protection should also increase the defense's
         // opportunity to make a contested/interceptable throw.
         const intP=clamp(.021+intAdj+conceptIntAdj+0.0035*Math.min(4,syD.centerfield+syD.ballhawk)
-                          +risk*0.011+(d.cov-o.qbA)/1050+defPlan.coverage/180+defPlan.deep/260+(50-matchupCov)/900+pressureInt,.010,.155);
+                          +risk*0.011+(d.cov-o.qbA)/1050+defPlan.coverage/180+defPlan.deep/260+(50-matchupCov)/900+pressureInt
+                          +((coverDef?.a.jmp||60)-(rec?.a.jmp||60))/1800,.010,.155);
 
         st(qb,"pa",1); st(rec,"tgt",1);
         targetAir=Math.max(-2,Math.round(gauss(playType==="shot"?11.25:playType==="quick"?2.8:playType==="screen"?0:playType==="playAction"?7.9:5.35,playType==="shot"?8:(playType==="playAction"?5.4:4.2))));
@@ -2797,7 +2791,12 @@ function* simGamePlay(g,neutral){
         } else if(rnd()<dropP){
           passDropped=true; st(rec,"drop",1); st(qb,"drop",1);
           gain=0; timeoff=0;
-          const db=coverDef; if(db) st(db,"pd",1);
+          // A drop is on the receiver — he had it in his hands. Crediting the
+          // coverage man a "defended" every single time overstated PD totals
+          // badly (3-5x realistic for a good corner). Real drops are
+          // sometimes still induced by a big hit or tight coverage forcing
+          // the concentration break, so it's not zero — just not automatic.
+          const db=coverDef; if(db&&rnd()<0.15) st(db,"pd",1);
         } else if(rnd()<compP){
           passCompleted=true;
           const air=targetAir;
@@ -2823,7 +2822,15 @@ function* simGamePlay(g,neutral){
           }
         } else { gain=0; timeoff=0;
           const db=coverDef||ws(SH[def].def.filter(x=>x[1]==="CB"||x[1]==="S").map(x=>[x[0],x[0].a.cov]));
-          if(db){st(db,"pd",1);track(db);}
+          // Same issue as the drop case: this bucket is every remaining
+          // incompletion — mostly an off-target throw with no real
+          // defensive disruption. Crediting a PD on all of them, every
+          // time, is the main reason PD totals were running so far above
+          // realistic. A real breakup is a genuine, and not universal,
+          // event — scaled a little by his coverage skill since a better
+          // corner is more often the reason the ball fell incomplete
+          // rather than just an inaccurate throw.
+          if(db&&rnd()<clamp(0.28+(db.a.cov-70)/260,.15,.45)){st(db,"pd",1);track(db);}
         }
         // Coverage fouls are outcome-aware: stronger receiver/defender mismatches raise the rate.
         if(!turnover){
@@ -2961,8 +2968,18 @@ function* simGamePlay(g,neutral){
         }
       }
     }
-    // tackle credit
-    if(!turnover&&gain<20&&rnd()<.8){
+    // tackle credit — only when there was actually a ball carrier to bring
+    // down: a completed catch or a run play. An incomplete pass has nobody
+    // to tackle at all, but gain defaults to 0 and this never checked
+    // passCompleted, so it was firing here too — handing a phantom tackle to
+    // a random defender (weighted by raw tackling attribute) on roughly 80%
+    // of every incompletion. A player on the field for every dropback (an
+    // every-down EDGE rusher, say) racks these up constantly on top of his
+    // real production, which is why season tackle totals were running well
+    // above realistic even for players whose actual role wouldn't produce
+    // many. Sacks are excluded too since they already credit their own
+    // tackle above — this was double-counting those as two tackles.
+    if(!turnover&&!passSack&&gain<20&&(!isPass||passCompleted)&&rnd()<.8){
       const tk=ws(SH[def].def.map(x=>[x[0],x[0].a.tak
         *(hasSyn(x[0],"rangy")?1.20:1)*(hasSyn(x[0],"thumper")?1.14:1)]));
       if(tk){st(tk,"tkl",1);track(tk);}
@@ -3266,6 +3283,69 @@ function awarenessAging(p){
   if(hasTrait(p,"coasts")) d-=0.3;
   return d;
 }
+/* Real production should weigh on where a man's rating goes next — right
+   now it doesn't at all; a 2-sack season and a 17-sack season currently
+   move his rating identically. Roughly zero for a solid average-starter
+   year, positive for anything better, negative for a quiet one, and
+   deliberately uncapped on the upside so a truly historic season (17
+   sacks, 99 tackles) can matter as much as it should — including, for an
+   older player, meaningfully fighting off age-based decline rather than
+   his rating falling regardless of how he actually played. O-line and
+   punters have no reliable individual counting stat to grade on here, so
+   they fall back to 0 (no effect either way) rather than a guess.
+*/
+function seasonPerformanceFactor(p){
+  const s=p.stats; if(!s||!s.gp) return 0;
+  let score=null, base=100, elite=200;
+  if(p.pos==="QB"){
+    score=(s.py||0)/24+(s.ptd||0)*9-(s.pint||0)*5; base=300; elite=480;
+  } else if(p.pos==="RB"){
+    score=(s.ry||0)/9+(s.rtd||0)*7+(s.recy||0)/10+(s.rectd||0)*7; base=180; elite=340;
+  } else if(p.pos==="WR"){
+    score=(s.recy||0)/8.5+(s.rectd||0)*7; base=140; elite=240;
+  } else if(p.pos==="TE"){
+    score=(s.recy||0)/8.5+(s.rectd||0)*7; base=90; elite=170;
+  } else if(p.pos==="EDGE"||p.pos==="DT"){
+    score=(s.sak||0)*13+(s.tkl||0)/2.4+(s.pd||0)*2; base=100; elite=200;
+  } else if(p.pos==="LB"){
+    score=(s.tkl||0)/2.4+(s.sak||0)*10+(s.int||0)*10+(s.pd||0)*2; base=70; elite=145;
+  } else if(p.pos==="CB"||p.pos==="S"){
+    score=(s.int||0)*12+(s.pd||0)*2.5+(s.tkl||0)/3; base=70; elite=135;
+  } else if(p.pos==="K"&&s.fga>=10){
+    score=(s.fgm/s.fga)*100; base=82; elite=96;
+  } else return 0;
+  if(score===null) return 0;
+  return (score-base)/(elite-base);
+}
+// Real position-room groupings for mentorship — an O-lineman learns from
+// whichever vets are in the O-line room, not strictly his own exact slot,
+// same for the D-line and the secondary. Skill positions and LB stay as
+// their own room since that's how they actually meet.
+function positionRoom(pos){
+  if(pos==="LT"||pos==="LG"||pos==="C"||pos==="RG"||pos==="RT") return "OL";
+  if(pos==="EDGE"||pos==="DT") return "DL";
+  if(pos==="CB"||pos==="S") return "DB";
+  if(pos==="K"||pos==="P") return "ST";
+  return pos;
+}
+// A veteran's presence in the room — not just his own play — can speed up or
+// slow down how fast the young players around him actually develop. Mentor
+// and Cold shoulder are the two ends of that; requires an actual vet (4+
+// years) doing the mentoring, and only matters for players still early
+// enough in their career to be learning from someone else.
+function mentorshipMult(p,team){
+  if(!team||p.exp>3) return 1;
+  const room=positionRoom(p.pos);
+  let mult=1;
+  for(const id of team.roster){
+    if(id===p.id) continue;
+    const mate=S.players[id];
+    if(!mate||mate.exp<4||positionRoom(mate.pos)!==room) continue;
+    if(hasTrait(mate,"mentor")) mult*=1.16;
+    if(hasTrait(mate,"coldshoulder")) mult*=0.87;
+  }
+  return clamp(mult,0.75,1.35);
+}
 function progressPlayer(p,team){
   const coachDev = team&&team.staff.HC ? (team.staff.HC.dev*.5+(team.staff[POSGROUP[p.pos]==="o"?"OC":"DC"]||{dev:60}).dev*.5) : 60;
   const snaps = (p.stats.gp||0);
@@ -3283,7 +3363,7 @@ function progressPlayer(p,team){
     const mood = 0.88 + moraleOf(p)/500;
     const fitBonus = 0.94 + schemeFit(p)/850;
     const f = devRate*(0.55+0.45*play)*(0.7+coachDev/200)*(0.75+p.hidden.wrk/260)
-              *devMult(team)*traitDev*mood*fitBonus;
+              *devMult(team)*traitDev*mood*fitBonus*mentorshipMult(p,team);
     d = room>0 ? room*f*rf(.6,1.4) : rf(-0.9,0.7);
     if(p.age<=23) d+= rf(0,1.0);
     if(p.exp>=5) d*=0.72;               // established men rarely take another jump
@@ -3308,12 +3388,17 @@ function progressPlayer(p,team){
   }
   // injuries suppress
   if(p.injury>0) d-=1.2;
+  d += seasonPerformanceFactor(p) * 4;   // how he actually played this season
   d=clamp(d,-9,7.5);
   if(!team) d=Math.min(d,0)-rf(0.3,1.2);   // no facility, no coaching, no snaps
   const before=p.ovr;
   p.lastOvr=before;
   applyDelta(p,Math.round(d*10)/10);
   p.a.awr=c99(p.a.awr+Math.round(awarenessAging(p)*10)/10);
+  // Durability and K/P kicking attributes (kpw/kac) are all visible, normal
+  // OVRW-weighted attributes, so they already moved with everyone else in
+  // applyDelta above — no separate hidden shadow copy to keep in sync
+  // anymore. The simulation reads a.dur and a.kpw/a.kac directly.
   p.ovr=computeOVR(p.pos,p.a);
   const gained=p.ovr-before;
   // a full, persistent trail of every season's move — not just the single
@@ -3801,8 +3886,8 @@ function buildNoteBank(p){
   if(p.hidden.wrk>=82) add(`Everyone at ${S1} tells the same story about his work habits. First in, last out.`,"interview",1,true,1);
   if(p.hidden.wrk<=42) add(`Two position coaches used the word "maintenance" without being asked.`,"interview",1,true,-2);
   if(p.hidden.chr<=42) add(`Character flags. Multiple sources described immaturity that will need managing.`,"interview",1,true,-2);
-  if(p.hidden.inj>=68) add(`Body type and injury history suggest he'll miss time. Durability is a real risk.`,"medical",1,true,-2);
-  if(p.hidden.inj<=32) add(`Never missed a practice. Built to hold up.`,"medical",1,true,1);
+  if(p.a.dur<=32) add(`Body type and injury history suggest he'll miss time. Durability is a real risk.`,"medical",1,true,-2);
+  if(p.a.dur>=68) add(`Never missed a practice. Built to hold up.`,"medical",1,true,1);
   if(p.hidden.dev>=3) add(`Rare learner. Coaches say he only needs to be told once.`,"workout",1,true,2);
   if(p.hidden.pot-p.ovr>=14) add(`Nowhere near his ceiling. Raw, but the traits are worth betting on.`,"workout",1,true,2);
   if(p.hidden.pot-p.ovr<=3) add(`Polished and ready, but there isn't much left to develop.`,"workout",1,true,0);
@@ -3968,7 +4053,7 @@ function doScout(pid,action,scoutId){
   if(action==="workout") r.workout=true;
   // the right kind of work turns up what a man is actually like
   if(typeof revealTrait==="function"&&(p.traits||[]).length){
-    const window={medical:["glass","iron"],interview:["diva","leader","coasts","fragile"],
+    const window={medical:["glass","iron"],interview:["diva","leader","coasts","fragile","coldshoulder"],
                   tape:["motor","clutch","fragile"],game:["motor","clutch"],
                   workout:["gymrat","iron","motor"]}[action]||[];
     const eye=clamp(sc.eye/140,0.15,0.75);
@@ -5206,7 +5291,7 @@ function prospectSheet(pid){
         <tr><td class="muted">Three cone</td><td class="n">${c.cone.toFixed(2)}</td></tr>
         <tr><td class="muted">Bench</td><td class="n">${c.bench}</td></tr>`
         :`<tr><td class="muted">Combine</td><td class="n dim">not until February</td></tr>`}
-        ${r.medical?`<tr><td class="muted">Durability</td><td class="n">${p.hidden.inj>62?"concern":p.hidden.inj>40?"average":"excellent"}</td></tr>`:""}
+        ${r.medical?`<tr><td class="muted">Durability</td><td class="n">${p.a.dur<38?"concern":p.a.dur<60?"average":"excellent"}</td></tr>`:""}
         ${r.interview?`<tr><td class="muted">Work ethic</td><td class="n">${p.hidden.wrk>75?"outstanding":p.hidden.wrk>50?"solid":"questionable"}</td></tr>
         <tr><td class="muted">Character</td><td class="n">${p.hidden.chr>70?"no concerns":p.hidden.chr>45?"minor flags":"real concerns"}</td></tr>`:""}
         ${r.workout?`<tr><td class="muted">Room to grow</td><td class="n">${p.hidden.pot-p.ovr>12?"substantial":p.hidden.pot-p.ovr>5?"some":"limited"}</td></tr>`:""}
@@ -5713,7 +5798,8 @@ const ACT={
     const i=d.indexOf(+pid);
     if(i>0){ d[i]=d[i-1]; d[i-1]=+pid; t.depthManual=true; render(); }
   },
-  setrole:(role,pid)=>{
+  setrole:(role,pid,e)=>{
+    pid = e?.target?.value ?? pid;
     const t=S.teams[S.userTeam];
     t.defRolesManual=t.defRolesManual||{};
     if(!pid){ delete t.defRolesManual[role]; }
@@ -5728,7 +5814,8 @@ const ACT={
     toast("Defensive back roles back to the coordinator's own read.");
     render();
   },
-  adddepth:(pos,pid)=>{
+  adddepth:(pos,pid,e)=>{
+    pid = e?.target?.value || pid;
     if(!pid) return;
     const t=S.teams[S.userTeam];
     const p=S.players[+pid]; if(!p||!t.roster.includes(p.id)) return;
@@ -7544,11 +7631,13 @@ const TRAITS = {
   gymrat:  {name:"Gym rat",       good:1, hidden:1, blurb:"First in the building. Develops faster than his age suggests."},
   film:    {name:"Film junkie",   good:1, hidden:1, blurb:"Sees it before it happens. Awareness climbs every year."},
   leader:  {name:"Quiet leader",  good:1, hidden:0, blurb:"The room follows him. Lifts everyone around him."},
+  mentor:  {name:"Mentor",        good:1, hidden:0, blurb:"Takes the young guys under his wing. The rookies and second-year men in his room develop faster with him around."},
   clutch:  {name:"Clutch",        good:1, hidden:1, blurb:"Bigger in the fourth quarter than the first."},
   iron:    {name:"Durable",       good:1, hidden:1, blurb:"Never comes off the field."},
   glass:   {name:"Injury prone",  good:0, hidden:1, blurb:"Something is always tight. Misses more than he plays."},
   diva:    {name:"Diva",          good:0, hidden:1, blurb:"Wants the ball and wants to be paid. Sours quickly when either stops."},
   coasts:  {name:"Coasts",        good:0, hidden:1, blurb:"Peaks the year before a contract and disappears the year after."},
+  coldshoulder: {name:"Cold shoulder", good:0, hidden:1, blurb:"Doesn't share reps or reads. The young players in his room develop slower with him around."},
   fragile: {name:"Rattles",       good:0, hidden:1, blurb:"Loses the thread when the game gets away from him."}
 };
 const TRAIT_KEYS=Object.keys(TRAITS);
@@ -11326,19 +11415,9 @@ function buildRosterPlayer(r){
   p.ht=Number(r.h)||p.ht; p.wt=Number(r.w)||p.wt;
   for(const k in r.r) if(ATTRS.includes(k)) p.a[k]=clamp(r.r[k],25,99);
   p.hidden=p.hidden||{};
-  // A kicker/punter's real leg is a hidden trait (kpow/kacc/ppow/pplace),
-  // separate from the kpw/kac shown on his card. makePlayer() rolled those
-  // hidden numbers randomly before we got here — if the roster file carries
-  // real ratings for this man, they should drive his actual kicks, not just
-  // his displayed card.
-  if(r.p==="K"&&r.r){
-    if(r.r.kpw!==undefined) p.hidden.kpow=clamp(Math.round(r.r.kpw),25,99);
-    if(r.r.kac!==undefined) p.hidden.kacc=clamp(Math.round(r.r.kac),25,99);
-  }
-  if(r.p==="P"&&r.r){
-    if(r.r.kpw!==undefined) p.hidden.ppow=clamp(Math.round(r.r.kpw),25,99);
-    if(r.r.kac!==undefined) p.hidden.pplace=clamp(Math.round(r.r.kac),25,99);
-  }
+  // A kicker/punter's real leg is just his visible kpw/kac now (set above,
+  // same as every other attribute) — the simulation reads a.kpw/a.kac
+  // directly, so there's no separate hidden copy left to wire up here.
   p.hidden.pot=rosterCeiling(p,r);
   p.hidden.dev=devFromRoll(rnd());
   // Discipline is not part of the roster OVR scale. If supplied, preserve it;
