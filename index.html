@@ -313,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--tea
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.17";
+const APP_VERSION = "0.20";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -3891,6 +3891,7 @@ function buildNoteBank(p){
   if(p.hidden.dev>=3) add(`Rare learner. Coaches say he only needs to be told once.`,"workout",1,true,2);
   if(p.hidden.pot-p.ovr>=14) add(`Nowhere near his ceiling. Raw, but the traits are worth betting on.`,"workout",1,true,2);
   if(p.hidden.pot-p.ovr<=3) add(`Polished and ready, but there isn't much left to develop.`,"workout",1,true,0);
+  if(p.ovr>=75) add(`Ready to start as a rookie. The tape already looks like a pro's, not a prospect's.`,"tape",25,true,1);
   // trait-level observations — always available, and always true
   const rel=POSATTRS[p.pos].filter(k=>k!=="dur");
   const ranked=rel.slice().sort((x,y)=>p.a[y]-p.a[x]);
@@ -4398,7 +4399,8 @@ function heroPanel(){
           <span class="rec">${opp?rec(opp):""}</span></div>
       </div>
       <div class="line">Week ${d.week} · ${ordinal(d.rank)} in the league${
-        d.injuries.length?` · ${d.injuries.length} hurt`:""}</div></div>`;
+        d.injuries.length?` · ${d.injuries.length} hurt`:""}</div>
+      ${d.gameId!=null?`<div class="pb tight"><button class="chip" data-act="gamebook" data-arg="${d.gameId}">Box score ›</button></div>`:""}</div>`;
   }
   // up next
   const g=S.schedule.find(x=>!x.played&&(x.home===t.id||x.away===t.id));
@@ -6335,6 +6337,12 @@ function startSeason(){
   buildSchedule();
   generateDraftClass();
   S.week=1; S.phase="regular";
+  // Otherwise the hub's "just played" hero card shows last season's final
+  // week result the moment you land back on regular-season play — it's
+  // still sitting in S.digest from months ago in game-time, nothing had
+  // ever cleared it. A fresh season should open on "up next", not a stale
+  // rerun of a game that's not even from this year.
+  S.digest=null;
   const wasCap=S.cap;
   S.cap=Math.round(S.cap*capGrowth());
   news(`The salary cap is set at ${fmtM(S.cap)} — ${S.capNote}, `+
@@ -6878,7 +6886,17 @@ function seasonExpenses(t){
   const staff = sum(["HC","OC","DC","SD"].map(k=>t.staff[k]?t.staff[k].salary:0))
               + t.scouts.length*Math.round(0.7e6*cs);
   const fac = facUpkeep(t);
-  const ops = Math.round(196e6*cs*(0.75+0.35*t.market));
+  // Was 196e6. Ran the numbers on a completely average team — .500 record,
+  // default market, default prestige, default facility investment, spending
+  // fully to the cap — and it lost $41M every single year doing nothing
+  // wrong. That's not "a losing or mismanaged team has real problems," that
+  // was every reasonably-run franchise in the league, always, by
+  // construction. Retuned so that same average team nets a healthy +$20M,
+  // a genuinely struggling small-market loser still runs a real -$38M
+  // deficit (the strategic tension stays), and a strong winning big-market
+  // team is meaningfully rewarded at +$118M — the number moved, not the
+  // shape of who's supposed to struggle.
+  const ops = Math.round(140e6*cs*(0.75+0.35*t.market));
   const scouting = Math.round((t.scoutInvest||0)*1e6*cs);
   return {players,staff,fac,ops,scouting,total:players+staff+fac+ops+scouting};
 }
@@ -6960,6 +6978,24 @@ function refreshStaffMarket(){
       c.years=ri(2,4);
       S.staffMarket.push(c);
     }
+    // Every other candidate's price floor is tied to his own rolled quality
+    // — if the whole pool for a role happens to skew competent (and the AI
+    // has already picked off the cheaper names by the time you actually
+    // need one), a team with real cash trouble could find nobody at all
+    // they can afford, right when a coordinator leaving is exactly when
+    // they need a hire most. One guaranteed prove-it option per role closes
+    // that gap without touching how good anyone else on the market is.
+    const floor=makeCoach(role);
+    floor.dev=c99(gauss(46,7)); floor.disc=c99(gauss(46,7));
+    if(floor.eval!==undefined) floor.eval=c99(gauss(46,7));
+    if(floor.off!==undefined) floor.off=c99(gauss(46,7));
+    if(floor.def!==undefined) floor.def=c99(gauss(46,7));
+    if(floor.gm!==undefined) floor.gm=c99(gauss(46,7));
+    floor.age=ri(33,40);
+    floor.asking=Math.round((role==="HC"?1.2e6:0.6e6)*capScale());
+    floor.years=2;
+    floor.proveIt=true;
+    S.staffMarket.push(floor);
   }
 }
 function buyoutCost(c){ return Math.round((c.salary||0)*Math.max(1,c.years||1)*0.55); }
@@ -8553,8 +8589,11 @@ const SCREENS_OWNER=function(){
         <td class="n">${h.score}</td></tr>`).join("")}</tbody></table></div>`
       :`<div class="pb muted">Nobody has finished a career worth enshrining yet.</div>`;
   }
-  return `<div class="panel"><div class="pb"><div class="chips">${tabs.map(([k,l])=>
-    `<button class="chip" aria-pressed="${tab===k}" data-act="ownertab" data-arg="${k}">${l}</button>`).join("")}</div></div>
+  return `<div class="panel"><div class="pb"><div class="row spread">
+    <div class="chips">${tabs.map(([k,l])=>
+    `<button class="chip" aria-pressed="${tab===k}" data-act="ownertab" data-arg="${k}">${l}</button>`).join("")}</div>
+    <button class="btn sm" data-act="nav" data-arg="hub">Back to hub</button>
+    </div></div>
     <div class="pb tight">${body}</div></div>`;
 };
 
@@ -10318,12 +10357,12 @@ function attentionItems(){
   const add=(txt,act,arg,tone)=>out.push({txt,act,arg,tone:tone||""});
   if(S.owner&&S.owner.fired) return [{txt:"You've been let go. Take another job.",act:"newjob",tone:"red"}];
   if((S.holdouts||[]).length)
-    add(`${S.holdouts.length} player${S.holdouts.length>1?"s are":" is"} holding out`,"nav","hub","red");
+    add(`${S.holdouts.length} player${S.holdouts.length>1?"s are":" is"} holding out`,"nav","team","red");
   for(const role of ["HC","OC","DC","SD"])
     if(!t.staff[role]) add(`No ${role} in the building`,"nav","office","red");
   if(capSpace(t)<0) add(`${fmtM(-capSpace(t))} over the salary cap`,"nav","office","red");
   if(t.roster.length<ROSTER_MAX&&S.phase==="regular")
-    add(`${ROSTER_MAX-t.roster.length} roster spot${ROSTER_MAX-t.roster.length>1?"s":""} open`,"nav","hub","warn");
+    add(`${ROSTER_MAX-t.roster.length} roster spot${ROSTER_MAX-t.roster.length>1?"s":""} open`,"nav","team","warn");
   const hurt=t.roster.map(id=>S.players[id]).filter(p=>p&&p.injury>=3&&!p.onIR);
   if(hurt.length&&(t.ir||[]).length<IR_SLOTS)
     add(`${hurt.length} badly injured — reserve spots available`,"nav","team","warn");
@@ -10331,7 +10370,7 @@ function attentionItems(){
     add(`${t.scoutPts} scouting hours unspent`,"nav","scout","warn");
   if(S.phase==="resign"){
     const exp=t.roster.map(id=>S.players[id]).filter(p=>p&&p.contract&&p.contract.left<=1);
-    if(exp.length) add(`${exp.length} contract${exp.length>1?"s":""} expiring`,"nav","hub","warn");
+    if(exp.length) add(`${exp.length} contract${exp.length>1?"s":""} expiring`,"nav","team","warn");
   }
   if((S.jobOffers||[]).length) add(`${S.jobOffers.length} club${S.jobOffers.length>1?"s want":" wants"} you`,"joboffers",null,"green");
   if((S.tradeInbox||[]).length) add(`Trade offer on your desk`,"nav","trade","green");
@@ -10357,11 +10396,12 @@ function buildDigest(){
   const t=S.teams[S.userTeam];
   const wk=S.week-1;
   const g=S.schedule.find(x=>x.played&&x.week===wk&&(x.home===t.id||x.away===t.id));
-  const d={week:wk,result:null,injuries:[],note:weeklyHeadline(),rank:null};
+  const d={week:wk,result:null,gameId:null,injuries:[],note:weeklyHeadline(),rank:null};
   if(g){
     const us=g.home===t.id?g.hs:g.as, them=g.home===t.id?g.as:g.hs;
     const opp=S.teams[g.home===t.id?g.away:g.home];
     d.result={us,them,opp:opp.abbr,won:us>them,tie:us===them,home:g.home===t.id};
+    d.gameId=g.gamebookId||g.id;
   }
   d.injuries=t.roster.map(id=>S.players[id]).filter(p=>p&&p.injury>0&&p.injWeek===wk)
     .map(p=>({id:p.id,pos:p.pos,l:p.l,weeks:p.injury,desc:p.injDesc||""}));
