@@ -313,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--tea
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.25";
+const APP_VERSION = "0.30";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -1000,7 +1000,7 @@ function makeTeam(i){
     defShell:"mixed",
     w:0,l:0,t:0, pf:0, pa:0, divW:0,divL:0,confW:0,confL:0,
     streak:0, seed:0, madePlayoffs:false,
-    scoutBudget:0, scoutPts:0,
+    scoutBudget:0, scoutPts:0, autoScout:false,
     deadCap:0, history:[], ir:[], ps:[], _fill:null,
     ai:{ scoutSkill: clamp(gauss(.55,.18),.15,.95),
          aggression: rf(.3,.9), draftBPA: rf(.35,.85), winNow: rf(.2,.9) },
@@ -1286,6 +1286,14 @@ const RB_ROLE_WEIGHTS={
   EARLY:{ovr:{trk:.28,elu:.18,spd:.16,str:.14,awr:.12,cth:.06,dur:.06}},
   THIRD:{ovr:{cth:.30,elu:.18,agi:.15,awr:.17,spd:.10,pbk:.10,dur:0}}
 };
+/* Who actually finishes a run play, once the ball is in the box. Used by the
+   tackle-crediting lottery (see the play-by-play loop) — each position's own
+   number rather than two positions arbitrarily sharing one, tuned against
+   roughly real football shares: linebackers the plurality, safeties a clear
+   second as the real second-level/alley support defenders, corners mostly
+   perimeter-only, tackles and edge rushers each a modest single-digit-to-
+   mid-teens share of the front seven's own portion. */
+const RUN_TACKLE_WEIGHT={LB:1.05,S:0.95,DT:0.62,CB:0.55,EDGE:0.42};
 function defensiveRoleScore(p,role){
   if(!p) return -Infinity;
   const r=role==='bigNickel'?'BN':role;
@@ -3045,12 +3053,39 @@ function* simGamePlay(g,neutral){
       let tk=null;
       if(isPass&&passCompleted){
         if(coverDef&&rnd()<0.62) tk=coverDef;
+        // 0.15 still worked out to roughly 3% of this pool once his tak
+        // rating and headcount were run through it — call it a broken-play
+        // hustle tackle at best, since he's several yards upfield rushing the
+        // passer and, having failed to get home, is usually the last man in
+        // position to also finish a completed throw. Even a screen is
+        // mostly a wash for him: he's either sealed out of the play by a
+        // tackle releasing to block him, or he's the exact defender the
+        // screen was designed to work behind — the tackle on those goes to
+        // whichever linebacker or DB reads it and flows to the ball, not to
+        // him. Down to something closer to that broken-play rate. DT comes
+        // down with him — he's not in coverage either, so his own presence
+        // in this pool was really the same borrowed logic.
         else tk=ws(SH[def].def.map(x=>[x[0],
-          x[0].a.tak*(x[1]==="LB"||x[1]==="S"?1.3:x[1]==="CB"?1.1:0.25)
+          x[0].a.tak*(x[1]==="LB"||x[1]==="S"?1.3:x[1]==="CB"?1.1:x[1]==="EDGE"?0.05:0.14)
           *(hasSyn(x[0],"rangy")?1.20:1)*(hasSyn(x[0],"thumper")?1.14:1)]));
       } else {
+        // Even with EDGE already discounted below DT/LB here, the weighted
+        // lottery was still handing him roughly 16% of every run-play tackle
+        // once his tak rating and headcount were both worked through — well
+        // above a real edge rusher's ~8-12% share of run stops, since his
+        // job is mostly to set the edge and force the ball back inside for
+        // someone else to finish, not to be the one who makes the tackle.
+        // Tying DT and LB to the same weight was also flattening a real
+        // difference between them, and lumping CB and S into one "everyone
+        // else" bucket was burying safeties — the actual second-level and
+        // alley run-support defenders — behind corners, who are mostly only
+        // in on it once a run gets to the perimeter. RUN_TACKLE_WEIGHT gives
+        // each group its own number instead of two paired off arbitrarily,
+        // tuned to land the pool at roughly LB 40-45%, S low-20s%, DT
+        // mid-teens%, CB and EDGE both under 10% — the rough real-football
+        // shape of who actually finishes a run play.
         tk=ws(SH[def].def.map(x=>[x[0],
-          x[0].a.tak*(x[1]==="DT"||x[1]==="LB"?1.35:x[1]==="EDGE"?0.9:0.35)
+          x[0].a.tak*(RUN_TACKLE_WEIGHT[x[1]]||0.5)
           *(hasSyn(x[0],"rangy")?1.20:1)*(hasSyn(x[0],"thumper")?1.14:1)]));
       }
       if(tk){st(tk,"tkl",1);track(tk);}
@@ -3279,9 +3314,27 @@ function leaders(stat,n,filterPos){
    Module 4: progression, contracts, free agency, trades, news
    ============================================================ */
 
-function news(txt,kind,pid){
-  S.news.unshift({year:S.year,week:S.week,txt,kind:kind||"info",pid:pid||null});
+function news(txt,kind,pid,teamId){
+  S.news.unshift({year:S.year,week:S.week,txt,kind:kind||"info",pid:pid||null,
+    teamId:teamId!==undefined&&teamId!==null?teamId:null});
   if(S.news.length>420) S.news.length=420;
+}
+// Kinds that, by how the sim generates them, are never about anyone but the
+// user's own club (trades and free-agent signings only ever fire through the
+// user-facing actions/offers; wins/losses are only ever the user's own game).
+// Everything else needs either an explicit teamId (passed at the call site
+// for the ambiguous cases — a record, a retirement, a Hall of Fame class —
+// where the same news() call can describe any team's player) or, for the
+// draft, a look at who actually picked the guy.
+const PERSONAL_NEWS_KINDS=new Set(["win","loss","trade","signing"]);
+function isMyNews(n){
+  if(n.teamId!==null&&n.teamId!==undefined) return n.teamId===S.userTeam;
+  if(PERSONAL_NEWS_KINDS.has(n.kind)) return true;
+  if(n.kind==="draft"&&n.pid!=null){
+    const p=S.players[n.pid];
+    return !!(p&&p.draft&&p.draft.pickedBy===S.userTeam);
+  }
+  return false;
 }
 function weeklyNews(wk,games){
   const ut=S.teams[S.userTeam];
@@ -3553,6 +3606,17 @@ function needScore(t,pos){
 function teamNeeds(t){
   return POS.map(pos=>({pos,n:needScore(t,pos)})).sort((a,b)=>b.n-a.n);
 }
+// A quick, honest read on where a club is thin — the same needScore() the AI
+// itself trades and drafts off of, just put in front of you instead of
+// staying invisible. Nothing here is inside information: it's derived from
+// the same roster you can already see on their depth chart.
+function teamNeedsList(t,n){
+  return teamNeeds(t).filter(x=>x.n>16).slice(0,n||3);
+}
+function teamNeedsBlurb(t,n){
+  const top=teamNeedsList(t,n);
+  return top.length?top.map(x=>x.pos).join(", "):"Nothing glaring";
+}
 /* A position can look fine today and still be a real target — the starter
    is playing out his walk year and nobody behind him is ready. needScore
    alone only sees the roster as it stands right now; this adds the weight
@@ -3689,7 +3753,7 @@ function offseasonProgress(){
       S.freeAgents=S.freeAgents.filter(id=>id!==p.id);
       if(p.ovr>=78||p.accolades.length>2)
         news(`${p.pos} ${p.f} ${p.l} retires after ${p.career.seasons} `+
-          `season${p.career.seasons===1?"":"s"}`,"league",p.id);
+          `season${p.career.seasons===1?"":"s"}`,"league",p.id,t?t.id:null);
     }
     if(p.stats&&p.stats.gp){
       p.seasonLog=p.seasonLog||[];
@@ -4171,6 +4235,201 @@ function doScout(pid,action,scoutId){
   return {ok:true,msg:`${A.name}: ${sc.name} filed a report.`,found};
 }
 
+/* ---------- scouting a trade target ----------
+   Same idea as scouting a draft prospect — the same hours, the same scouts,
+   the same "your department can be confidently wrong" math — just aimed at
+   a man already on somebody else's roster instead of a college kid. There's
+   no league "consensus" for an established pro the way there is for a
+   prospect, so a stable, once-rolled publicRead (tape and box scores, same
+   as anyone watching from outside) stands in for it: at zero hours spent,
+   that's all you get, not his true number. */
+function ensureVetScout(pid){
+  S.vetScout=S.vetScout||{};
+  if(S.vetScout[pid]) return S.vetScout[pid];
+  const p=S.players[pid];
+  const r={k:0, err:gauss(0,1),
+    publicRead:clamp(Math.round(p.ovr+gauss(0,7)),GRADE_FLOOR,GRADE_CEIL),
+    notes:[], acts:{}, scoutIds:[], medical:false, interview:false, workout:false};
+  S.vetScout[pid]=r;
+  return r;
+}
+function vetGrade(pid){
+  const p=S.players[pid], r=S.vetScout[pid];
+  if(!r) return null;
+  const k=r.k;
+  const w=Math.pow(k/100,0.62);
+  const scouts=r.scoutIds.map(i=>S.teams[S.userTeam].scouts.find(s=>s.id===i)).filter(Boolean);
+  const scoutAcc=scouts.length? avg(scouts.map(s=>s.acc)) : 55;
+  const ownSD=clamp(2.6-(scoutAcc-55)*0.022,0.9,4.2);
+  const own=p.ovr + r.err*ownSD;
+  const est=own*w + r.publicRead*(1-w);
+  const ana=analyticsEdge(S.teams[S.userTeam]);
+  const band=(6.5+16*Math.pow(1-k/100,1.15))*(1-0.30*ana);
+  return {est:clamp(est,GRADE_FLOOR,GRADE_CEIL), band, k,
+    lo:clamp(est-band,GRADE_FLOOR-2,GRADE_CEIL), hi:clamp(est+band,GRADE_FLOOR,GRADE_CEIL+2)};
+}
+function doVetScout(pid,action,scoutId){
+  const t=S.teams[S.userTeam], r=ensureVetScout(pid), p=S.players[pid];
+  const A=ACTIONS[action];
+  if(!A) return {ok:false,msg:"Unavailable."};
+  if(t.scoutPts<A.cost) return {ok:false,msg:`Not enough scouting hours — need ${A.cost}.`};
+  const sc=t.scouts.find(s=>s.id===scoutId)||t.scouts[0];
+  if(!sc) return {ok:false,msg:"No scouts on staff."};
+  if((r.acts[action]||0)>= (action==="tape"?5: action==="game"?3:1))
+    return {ok:false,msg:`${A.name} already exhausted on him.`};
+  t.scoutPts-=A.cost;
+  r.acts[action]=(r.acts[action]||0)+1;
+  if(!r.scoutIds.includes(sc.id)) r.scoutIds.push(sc.id);
+  let mult=(0.62+sc.acc/150)*(1+0.05*(facLvl(t,"scoutdept")-1));
+  if(sc.posSpec&&sc.posSpec.includes(p.pos)) mult*=1.20;
+  r.k=clamp(r.k+A.gain*mult,0,100);
+  if(action==="medical") r.medical=true;
+  if(action==="interview") r.interview=true;
+  if(action==="workout") r.workout=true;
+  if(typeof revealTrait==="function"&&(p.traits||[]).length){
+    const window={medical:["glass","iron"],interview:["diva","leader","coasts","fragile","coldshoulder"],
+                  tape:["motor","clutch","fragile"],game:["motor","clutch"],
+                  workout:["gymrat","iron","motor"]}[action]||[];
+    const eye=clamp(sc.eye/140,0.15,0.75);
+    for(const k of p.traits){
+      if(!window.includes(k)) continue;
+      if(rnd()<eye&&revealTrait(p,k))
+        r.notes.push({txt:`${sc.name} on his makeup: ${TRAITS[k].name.toLowerCase()}.`, src:sc.name});
+    }
+  }
+  return {ok:true,msg:`${A.name}: ${sc.name} filed a report on ${p.f} ${p.l}.`};
+}
+// Old records outlive their usefulness once a man is off every roster for
+// good — this only ever trims retirees, never a free agent you might still
+// be circling.
+function pruneVetScout(){
+  if(!S.vetScout) return;
+  for(const pid in S.vetScout){
+    const p=S.players[pid];
+    if(!p||p.retired) delete S.vetScout[pid];
+  }
+}
+// Opt-in: spend whatever scouting hours are left banked at the end of a
+// week through the exact same doScout/doVetScout calls a person would make
+// by hand — same cost table, same scout-accuracy math, same fog. This never
+// reads a hidden true rating to decide who to look at; the queue is ordered
+// by public information only (draft board consensus, or a team's positional
+// needs), so it can't be smarter about *who's good* than a person glancing
+// at the same board would be. It only ever saves someone the click.
+function autoScoutQueue(t){
+  // Draft prospects first, whenever a class is posted — cheapest reports
+  // (tape) on whoever the board itself ranks highest and isn't already
+  // well scouted yet, same order the "Spend the scouting hours" staff
+  // task already uses.
+  if(S.prospects&&S.prospects.length){
+    const unfinished=S.prospects.filter(id=>{const r=S.scout[id]; return !r||r.k<70;});
+    if(unfinished.length){
+      return unfinished.slice().sort((a,b)=>
+        (S.players[b].draft.consensus)-(S.players[a].draft.consensus));
+    }
+    // whole board's already well scouted — fall through to vet targets below
+  }
+  // Otherwise, if trades are open, look at rostered vets who fill the
+  // team's biggest positional holes — the same "Need:" read shown on
+  // every opponent team page and trade partner screen, nothing hidden.
+  if(tradesOpen()){
+    const needs=teamNeedsList(t,6).map(n=>n.pos);
+    if(needs.length){
+      const pool=[];
+      for(const ot of S.teams){
+        if(ot.id===t.id) continue;
+        for(const id of ot.roster){
+          const p=S.players[id];
+          if(p&&!p.retired&&needs.includes(p.pos)) pool.push(p.id);
+        }
+      }
+      return pool.sort((a,b)=>needs.indexOf(S.players[a].pos)-needs.indexOf(S.players[b].pos));
+    }
+  }
+  return [];
+}
+function autoScoutHours(t){
+  const queue=autoScoutQueue(t);
+  if(!queue.length) return 0;
+  const isProspect=id=>S.prospects&&S.prospects.includes(id);
+  const scoutId=(t.scouts[0]||{}).id;
+  if(!scoutId) return 0;
+  const before=t.scoutPts;
+  const cheapest=Math.min(...Object.values(ACTIONS).map(a=>a.cost));
+  // Same order a person clicking down the "Assign work" chips would land
+  // on: cheap tape first, then whichever report types are still untried —
+  // never a bonus action, never a skipped cost.
+  const order=["tape","game","interview","medical","workout"];
+  let guard=0;
+  while(t.scoutPts>=cheapest&&guard++<800){
+    let spent=false;
+    for(const id of queue){
+      if(t.scoutPts<cheapest) break;
+      const vet=!isProspect(id);
+      const r=vet?ensureVetScout(id):S.scout[id];
+      if(r&&r.k>=70) continue;
+      for(const act of order){
+        if(t.scoutPts<ACTIONS[act].cost) continue;
+        const res=vet?doVetScout(id,act,scoutId):doScout(id,act,scoutId);
+        if(res.ok){ spent=true; break; }
+      }
+    }
+    if(!spent) break;
+  }
+  return before-t.scoutPts;
+}
+function vetScoutPanel(pid){
+  const p=S.players[pid], t=S.teams[S.userTeam];
+  const r=ensureVetScout(pid), g=vetGrade(pid);
+  const known=r.k>=12;
+  const GLO=GRADE_FLOOR, GHI=GRADE_CEIL, SPAN=GHI-GLO;
+  const bpos=v=>clamp((v-GLO)/SPAN*100,0,100);
+  const bandLeft=known?bpos(g.lo):0, bandW=known?clamp(bpos(g.hi)-bandLeft,1,100-bandLeft):0;
+  const estL=known?bpos(g.est):0;
+  const acts=Object.keys(ACTIONS).map(k=>{
+    const A=ACTIONS[k], usedMax=k==="tape"?5:k==="game"?3:1;
+    const used=(r.acts[k]||0);
+    const off=used>=usedMax||t.scoutPts<A.cost;
+    return `<button class="btn sm" data-act="dovetscout" data-arg="${pid}" data-arg2="${k}" ${off?"disabled":""}>
+      ${A.name} <span class="dim">${A.cost}h</span>${used?` <span class="tag">${used}/${usedMax}</span>`:""}</button>`;
+  }).join(" ");
+  const notes=r.notes.length?r.notes.map(n=>
+    `<div class="note">${esc(n.txt)}<div class="src">— ${esc(n.src)}</div></div>`).join(""):
+    `<p class="muted small">No workups filed. Spend some hours if you're serious about him.</p>`;
+  return `
+    <div class="panel"><div class="ph"><h3>Scouting report</h3>
+      <span class="sub">${known?`± ${Math.round(g.band)}`:"not evaluated"}</span></div>
+    <div class="pb stack">
+      <div class="spread"><span class="muted small">Our read</span>
+        <span>${known?`<b class="num">${Math.round(g.est)}</b>`:`<span class="dim">no real read yet</span>`}</span></div>
+      ${known?`<div class="band"><i style="left:${bandLeft}%;width:${bandW}%"></i>
+        <u style="left:${estL}%"></u></div>
+        <div class="spread tiny dim"><span>${GRADE_FLOOR}</span><span>${
+          r.k>=85?"we know him":r.k>=55?"a fair read":r.k>=25?"early days":"barely looked"
+        }</span><span>${GRADE_CEIL}</span></div>`:""}
+      <p class="tiny dim" style="margin:0">He's on somebody else's roster — this is our department's outside read, not his real file.</p>
+    </div></div>
+    <div class="panel"><div class="ph"><h3>Reports</h3><span class="sub">${r.notes.length} filed</span></div>
+      <div class="pb stack">${notes}</div></div>
+    <div class="panel"><div class="ph"><h3>Look into him</h3>
+      <span class="sub">${Math.round(t.scoutPts)}h left</span></div>
+      <div class="pb stack">
+        <select data-act="setscout">${t.scouts.map(s=>
+          `<option value="${s.id}" ${S.activeScout===s.id?"selected":""}>${esc(s.name)}${s.region?` · ${s.region}`:" · national"}${s.posSpec?` · ${s.posSpec[0]}s`:""}</option>`).join("")}</select>
+        <div class="chips">${acts}</div>
+        <p class="tiny dim" style="margin:0">These hours come out of the same budget as your draft board — spend them where you mean it.</p>
+      </div></div>
+    <div class="panel"><div class="ph"><h3>The file</h3></div><div class="pb">
+      <table><tbody>
+        <tr><td class="muted">Age / size</td><td class="n">${p.age} · ${Math.floor(p.ht/12)}-${p.ht%12}, ${p.wt}</td></tr>
+        ${r.medical?`<tr><td class="muted">Durability</td><td class="n">${p.a.dur<38?"concern":p.a.dur<60?"average":"excellent"}</td></tr>`:""}
+        ${r.interview?`<tr><td class="muted">Work ethic</td><td class="n">${p.hidden.wrk>75?"outstanding":p.hidden.wrk>50?"solid":"questionable"}</td></tr>
+        <tr><td class="muted">Character</td><td class="n">${p.hidden.chr>70?"no concerns":p.hidden.chr>45?"minor flags":"real concerns"}</td></tr>`:""}
+        ${r.workout?`<tr><td class="muted">Room left</td><td class="n">${p.hidden.pot-p.ovr>10?"still climbing":p.hidden.pot-p.ovr>2?"a little left":"about tapped out"}</td></tr>`:""}
+      </tbody></table>
+    </div></div>`;
+}
+
 /* ---------- draft order & the draft ---------- */
 function buildDraftOrder(){
   const nonPlayoff=sortTeams(S.teams.filter(t=>!t.madePlayoffs)).reverse();
@@ -4452,13 +4711,21 @@ const POS_FULLNAME={QB:"Quarterback",RB:"Running back",WR:"Wide receiver",TE:"Ti
   EDGE:"Edge rusher",DT:"Defensive tackle",LB:"Linebacker",CB:"Cornerback",S:"Safety",
   K:"Kicker",P:"Punter"};
 function posTag(pos){return `<span class="pos ${posClass(pos)}" title="${esc(POS_FULLNAME[pos]||pos)}">${pos}</span>`;}
-function playerRow(p,extra){
+// A fogged read of a trade-target's overall — the same low-confidence public
+// number his own page shows, so the roster list can't be used to route
+// around scouting him properly first.
+function fogOvrRead(p){
+  const r=ensureVetScout(p.id);
+  return r.k>=12?Math.round(vetGrade(p.id).est):null;
+}
+function playerRow(p,extra,fog){
+  const ovrCell=fog?(()=>{ const v=fogOvrRead(p); return v===null?"?":"≈"+v; })():p.ovr;
   return `<tr class="click" data-act="player" data-arg="${p.id}">
     <td>${posTag(p.pos)}</td>
     <td>${esc(p.f[0])}. ${esc(p.l)}${p.injury>0?` <span class="tag red">${p.injury}w</span>`:""}
       ${p.exp===0?' <span class="tag">R</span>':""}</td>
     <td class="n">${p.age}</td>
-    <td class="n ovr">${p.ovr}</td>
+    <td class="n ovr">${ovrCell}</td>
     ${extra||""}
   </tr>`;
 }
@@ -4617,9 +4884,16 @@ const SCREENS_HUB=function(){
       `<tr class="click" data-act="player" data-arg="${p.id}"><td>${posTag(p.pos)}</td>
        <td>${esc(p.l)}</td><td class="muted small">${esc(p.injDesc)}</td>
        <td class="n">${p.injury}w</td></tr>`).join("")}</tbody></table></div></div>`:""}
+  <div class="panel"><div class="ph"><h3>Your team</h3></div>
+    <div class="pb tight">${(()=>{ const mine=S.news.filter(isMyNews).slice(0,20);
+      return mine.length?mine.map(n=>
+        `<div class="newsitem${n.pid!=null?" click":""}"${n.pid!=null?` data-act="player" data-arg="${n.pid}"`:""}>
+          <span class="w">${n.year}</span> ${esc(n.txt)}</div>`).join(""):
+        `<div class="pb muted">Nothing yet. Play a week.</div>`;})()}</div></div>
   <div class="panel"><div class="ph"><h3>Around the league</h3></div>
     <div class="pb tight">${S.news.slice(0,14).map(n=>
-      `<div class="newsitem"><span class="w">${n.year}</span> ${esc(n.txt)}</div>`).join("")||
+      `<div class="newsitem${n.pid!=null?" click":""}"${n.pid!=null?` data-act="player" data-arg="${n.pid}"`:""}>
+        <span class="w">${n.year}</span> ${esc(n.txt)}</div>`).join("")||
       `<div class="pb muted">Nothing yet. Play a week.</div>`}</div></div>`;
 };
 
@@ -4835,7 +5109,8 @@ const SCREENS_TEAM=function(){
       .filter(p=>ROSTER_GROUPS[grp].includes(p.pos))
       .filter(p=>!q||`${p.f} ${p.l} ${p.pos}`.toLowerCase().includes(q));
     ps=applySort("roster",ps,{
-      pos:p=>-POS.indexOf(p.pos), name:p=>p.l, age:p=>p.age, ovr:p=>p.ovr,
+      pos:p=>-POS.indexOf(p.pos), name:p=>p.l, age:p=>p.age,
+      ovr:p=>own?p.ovr:(fogOvrRead(p)??-1),
       cap:p=>p.contract?p.contract.apy:0, yrs:p=>p.contract?p.contract.left:0,
       exp:p=>p.exp
     },"pos");
@@ -4854,7 +5129,7 @@ const SCREENS_TEAM=function(){
         ${sortTH("roster","cap","Cap","n",null,"Cap hit this season")}${sortTH("roster","yrs","Yrs","n hide-sm",null,"Years left on contract")}</tr></thead>
       <tbody>${ps.map(p=>playerRow(p,
         `<td class="n">${p.contract?fmtM(p.contract.apy):"—"}</td>
-         <td class="n hide-sm">${p.contract?p.contract.left:"—"}</td>`)).join("")}</tbody></table></div>
+         <td class="n hide-sm">${p.contract?p.contract.left:"—"}</td>`,!own)).join("")}</tbody></table></div>
       ${ps.length?"":`<div class="pb muted">Nobody matches that.</div>`}
       ${comparePanel()}`;
   } else if(V.teamTab==="reserve"){
@@ -4918,7 +5193,7 @@ const SCREENS_TEAM=function(){
           ${p.pos!==pos?` <span class="tag">${p.pos}</span>`:""}
           <div class="tiny dim">${esc(p.f)} · ${p.age} · ${p.pos!==pos
             ? "out of position" : fitWord(schemeFit(p))}</div></td>
-        <td class="n ovrcell ${p.pos!==pos?"warn":""}">${ovrAt(p,pos)}</td>
+        <td class="n ovrcell ${p.pos!==pos?"warn":""}">${own?ovrAt(p,pos):(()=>{const v=fogOvrRead(p); return v===null?"?":"≈"+v;})()}</td>
         <td style="width:78px" class="row" style="gap:2px">${own&&i>0?`<button class="mini" data-act="promote" data-arg="${pos}" data-arg2="${p.id}">▲</button>`:""}${
           own?`<button class="mini" data-act="dropdepth" data-arg="${pos}" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
       </tr>`).join("");
@@ -4955,7 +5230,7 @@ const SCREENS_TEAM=function(){
         <td class="click" data-act="player" data-arg="${p.id}"><b>${esc(p.l)}</b>
           ${p.pos!==pos?` <span class="tag">${p.pos}</span>`:""}
           <div class="tiny dim">${esc(p.f)} · ${p.age}</div>${picker}</td>
-        <td class="n ovrcell">${Math.round(functionalOVR(p,role==="CB1"||role==="CB2"?"NB":role))}</td></tr>`;
+        <td class="n ovrcell">${own?Math.round(functionalOVR(p,role==="CB1"||role==="CB2"?"NB":role)):(()=>{const v=fogOvrRead(p); return v===null?"?":"≈"+v;})()}</td></tr>`;
     };
     const hasManual=t.defRolesManual&&Object.keys(t.defRolesManual).length;
     const dbSection=`<div class="depthgrp"><div class="row spread depthhead">
@@ -4990,7 +5265,7 @@ const SCREENS_TEAM=function(){
           ${p.pos!==pos?` <span class="tag">${p.pos}</span>`:""}
           <div class="tiny dim">${esc(p.f)} · ${p.age} · ${p.pos!==pos
             ? "out of position" : fitWord(schemeFit(p))}</div></td>
-        <td class="n ovrcell ${p.pos!==pos?"warn":""}">${ovrAt(p,pos)}</td>
+        <td class="n ovrcell ${p.pos!==pos?"warn":""}">${own?ovrAt(p,pos):(()=>{const v=fogOvrRead(p); return v===null?"?":"≈"+v;})()}</td>
         <td style="width:78px" class="row" style="gap:2px">${own&&i>0?`<button class="mini" data-act="promote" data-arg="${pos}" data-arg2="${p.id}">▲</button>`:""}${
           own?`<button class="mini" data-act="dropdepth" data-arg="${pos}" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
       </tr>`).join("");
@@ -5007,18 +5282,26 @@ const SCREENS_TEAM=function(){
     // into the "Middle linebacker" slot. This grades each labeled job on
     // what it actually needs instead — see LB_ROLE_WEIGHTS above.
     const lbSlots=assignLBRoles(t);
+    const lbManual=t.lbRolesManual||{};
+    const lbHasManual=Object.keys(lbManual).length;
+    const lbEligible=own?(t.depth.LB||[]).map(id=>S.players[id]).filter(Boolean):[];
     const lbSection=(()=>{
-      const rows=lbSlots.map(({label,role,p},i)=>{
-        if(!p) return `<tr><td colspan="4" class="dim small">${label} — nobody fits</td></tr>`;
-        const grade=role?Math.round(roleGrade(p,role,'ovr',LB_ROLE_WEIGHTS)):ovrAt(p,"LB");
+      const rows=lbSlots.map(({label,role,p,slotIdx,manual},i)=>{
+        const picker=(own&&role&&slotIdx!==null)?`<select data-act="setlbrole" data-arg="${slotIdx}" style="width:100%;font-size:11.5px;margin-top:3px">
+            <option value="">${lbManual[slotIdx]?"— let the coordinator choose —":"— coordinator's own choice —"}</option>
+            ${lbEligible.map(x=>`<option value="${x.id}" ${lbManual[slotIdx]===x.id?"selected":""}>${esc(x.pos)} ${esc(x.f)} ${esc(x.l)} — ${Math.round(roleGrade(x,role,'ovr',LB_ROLE_WEIGHTS))} here</option>`).join("")}
+          </select>`:"";
+        if(!p) return `<tr><td colspan="4" class="dim small">${label} — nobody fits${picker?`<br>${picker}`:""}</td></tr>`;
+        const trueGrade=role?Math.round(roleGrade(p,role,'ovr',LB_ROLE_WEIGHTS)):ovrAt(p,"LB");
+        const grade=own?trueGrade:(()=>{const v=fogOvrRead(p); return v===null?"?":"≈"+v;})();
         return `<tr class="${i===0?"starter":""}">
-          <td class="dim small" style="width:120px">${label}</td>
+          <td class="dim small" style="width:120px">${label}${manual?' <span class="tag gold" title="Your call, not the coordinator\'s">set</span>':""}</td>
           <td class="click" data-act="player" data-arg="${p.id}">
             <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
               :p.holdout?' <span class="tag warn">held out</span>':""}
             ${p.pos!=="LB"?` <span class="tag">${p.pos}</span>`:""}
             <div class="tiny dim">${esc(p.f)} · ${p.age} · ${p.pos!=="LB"
-              ? "out of position" : fitWord(schemeFit(p))}</div></td>
+              ? "out of position" : fitWord(schemeFit(p))}</div>${picker}</td>
           <td class="n ovrcell ${p.pos!=="LB"?"warn":""}">${grade}</td>
           <td style="width:44px" class="row" style="gap:2px">${
             own?`<button class="mini" data-act="dropdepth" data-arg="LB" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
@@ -5030,22 +5313,31 @@ const SCREENS_TEAM=function(){
         <span class="tiny dim">${d.length} deep</span></div>
         ${d.length?`<table class="depthtable"><tbody>${rows}</tbody></table>`
               :"<div class='pb muted small'>Nobody here.</div>"}
-        ${addSelectFor("LB",d)}</div>`;
+        ${addSelectFor("LB",d)}
+        ${own&&lbHasManual?`<div class="pb tight small muted" style="padding:6px 10px"><button class="mini" data-act="clearlbroles">Reset all to auto</button></div>`:""}</div>`;
     })();
     // Early-down vs. third-down back: same distinction for the backfield,
     // off plain attributes (RB_ROLE_WEIGHTS above) — never the hidden
     // "Third-down back" scouting trait, which stays fogged either way.
     const rbRoles=assignRBRoles(t);
+    const rbManual=t.rbRolesManual||{};
+    const rbHasManual=Object.keys(rbManual).length;
+    const rbEligible=own?(t.depth.RB||[]).map(id=>S.players[id]).filter(Boolean):[];
     const rbSection=(()=>{
-      const rbRow=(label,role,p)=>{
-        if(!p) return `<tr><td colspan="4" class="dim small">${label} — nobody fits</td></tr>`;
-        const grade=Math.round(roleGrade(p,role,'ovr',RB_ROLE_WEIGHTS));
+      const rbRow=(label,role,p,isManual)=>{
+        const picker=own?`<select data-act="setrbrole" data-arg="${role}" style="width:100%;font-size:11.5px;margin-top:3px">
+            <option value="">${rbManual[role]?"— let the coaches choose —":"— coaches' own choice —"}</option>
+            ${rbEligible.map(x=>`<option value="${x.id}" ${rbManual[role]===x.id?"selected":""}>${esc(x.f)} ${esc(x.l)} — ${Math.round(roleGrade(x,role,'ovr',RB_ROLE_WEIGHTS))} here</option>`).join("")}
+          </select>`:"";
+        if(!p) return `<tr><td colspan="4" class="dim small">${label} — nobody fits${picker?`<br>${picker}`:""}</td></tr>`;
+        const trueGrade=Math.round(roleGrade(p,role,'ovr',RB_ROLE_WEIGHTS));
+        const grade=own?trueGrade:(()=>{const v=fogOvrRead(p); return v===null?"?":"≈"+v;})();
         return `<tr class="${role==="EARLY"?"starter":""}">
-          <td class="dim small" style="width:120px">${label}</td>
+          <td class="dim small" style="width:120px">${label}${isManual?' <span class="tag gold" title="Your call, not the coaches\'">set</span>':""}</td>
           <td class="click" data-act="player" data-arg="${p.id}">
             <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
               :p.holdout?' <span class="tag warn">held out</span>':""}
-            <div class="tiny dim">${esc(p.f)} · ${p.age} · ${fitWord(schemeFit(p))}</div></td>
+            <div class="tiny dim">${esc(p.f)} · ${p.age} · ${fitWord(schemeFit(p))}</div>${picker}</td>
           <td class="n ovrcell">${grade}</td>
           <td style="width:44px" class="row" style="gap:2px">${
             own?`<button class="mini" data-act="dropdepth" data-arg="RB" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
@@ -5057,7 +5349,7 @@ const SCREENS_TEAM=function(){
             <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
               :p.holdout?' <span class="tag warn">held out</span>':""}
             <div class="tiny dim">${esc(p.f)} · ${p.age}</div></td>
-          <td class="n ovrcell">${ovrAt(p,"RB")}</td>
+          <td class="n ovrcell">${own?ovrAt(p,"RB"):(()=>{const v=fogOvrRead(p); return v===null?"?":"≈"+v;})()}</td>
           <td style="width:44px" class="row" style="gap:2px">${
             own?`<button class="mini" data-act="dropdepth" data-arg="RB" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
         </tr>`).join("");
@@ -5065,9 +5357,10 @@ const SCREENS_TEAM=function(){
       return `<div class="depthgrp"><div class="row spread depthhead">
         <span>${posTag("RB")} <b class="small">Running back</b> <span class="tiny dim">by role, not raw rank</span></span>
         <span class="tiny dim">${d.length} deep</span></div>
-        ${d.length?`<table class="depthtable"><tbody>${rbRow("Early-down back","EARLY",rbRoles.early)}${rbRow("Third-down back","THIRD",rbRoles.third)}${restRows}</tbody></table>`
+        ${d.length?`<table class="depthtable"><tbody>${rbRow("Early-down back","EARLY",rbRoles.early,rbRoles.earlyManual)}${rbRow("Third-down back","THIRD",rbRoles.third,rbRoles.thirdManual)}${restRows}</tbody></table>`
               :"<div class='pb muted small'>Nobody here.</div>"}
-        ${addSelectFor("RB",d)}</div>`;
+        ${addSelectFor("RB",d)}
+        ${own&&rbHasManual?`<div class="pb tight small muted" style="padding:6px 10px"><button class="mini" data-act="clearrbroles">Reset all to auto</button></div>`:""}</div>`;
     })();
     body=`<div class="pb small muted">${own
       ? "Tap a name to move him up the chart. The order here is the order they play in. A man can hold a spot at more than one position — a tight end who's also your fourth receiver doesn't have to give one up, since they were never on the field at the same time anyway."
@@ -5120,6 +5413,7 @@ const SCREENS_TEAM=function(){
     <div class="ph"><h2>${esc(t.city)} ${esc(t.name)}</h2>
       ${own?(V.teamTab==="depth"&&t.depthManual?`<button class="btn sm" data-act="depthauto">Reset chart</button>`:"")
         :`<button class="btn sm" data-act="myteam">Back to my team</button>`}</div>
+    ${own?"":`<div class="pb tight"><p class="tiny dim">Scouts read them as thin at: <b>${teamNeedsBlurb(t)}</b></p></div>`}
     <div class="pb"><div class="chips">${tabs.map(([k,l])=>
       `<button class="chip" aria-pressed="${V.teamTab===k}" data-act="teamtab" data-arg="${k}">${l}</button>`).join("")}</div></div>
     <div class="pb tight">${body}</div></div>${hintFor("team")}`;
@@ -5290,7 +5584,10 @@ const SCREENS_SCOUT=function(){
   if(!S.prospects.length&&S.phase!=="draft")
     return `<div class="panel"><div class="pb">
       <h2>No class on the board</h2>
-      <p class="muted">Next year's class is posted when the season kicks off.</p></div></div>`
+      <p class="muted">Next year's class is posted when the season kicks off.</p></div>
+      <div class="pb tight"><label class="row spread click" data-act="toggleautoscout" style="cursor:pointer">
+        <span class="small">Auto-scout unspent hours<br><span class="tiny dim">Any hours still banked at week's end go to whoever your scouts read as filling a need on another roster, once trades are open. Same scouts, same odds, same fog as doing it yourself.</span></span>
+        <input type="checkbox" ${t.autoScout?"checked":""} style="pointer-events:none"></label></div></div>`
       + collegeMapPanel();
   let list=S.prospects.map(id=>S.players[id]);
   if(V.scoutPos!=="ALL") list=list.filter(p=>p.pos===V.scoutPos||
@@ -5336,6 +5633,9 @@ const SCREENS_SCOUT=function(){
     + `<div class="panel">
     <div class="ph"><h2>Scouting</h2><span class="sub">${Math.round(t.scoutPts)} hours banked · +${scoutBudget(t)}/week</span></div>
     <div class="pb small muted">Worth targeting: ${draftTargets(t,4).join(", ")} — current holes and starters on expiring deals.</div>
+    <div class="pb tight"><label class="row spread click" data-act="toggleautoscout" style="cursor:pointer">
+        <span class="small">Auto-scout unspent hours<br><span class="tiny dim">Any hours still banked at week's end go to tape on the board's top names — or, once the board's covered and trades are open, to whoever your scouts read as filling a need elsewhere. Same scouts, same odds, same fog as doing it yourself.</span></span>
+        <input type="checkbox" ${t.autoScout?"checked":""} style="pointer-events:none"></label></div>
     <div class="pb stack">
       <div class="chips">${posFilters.map(p=>
         `<button class="chip" aria-pressed="${V.scoutPos===p}" data-act="spos" data-arg="${p}">${p}</button>`).join("")}</div>
@@ -5412,17 +5712,6 @@ function prospectSheet(pid){
     <div class="panel"><div class="ph"><h3>Reports</h3><span class="sub">${r.notes.length} filed</span></div>
       <div class="pb stack">${notes}</div></div>
 
-    ${(S.rumors&&S.rumors.length)?`<div class="panel">
-      <div class="ph"><h3>The rumor mill</h3>
-        <span class="sub">${(S.rumorReliability||0.5)>=0.75?"our sources are good"
-          :(S.rumorReliability||0.5)>=0.55?"our sources are mixed":"take all of it lightly"}</span></div>
-      <div class="pb stack">${S.rumors.map((r,i)=>`<div class="note">
-        <div class="small">${esc(r.txt)}</div>
-        ${r.checked?`<div class="tiny ${r.true_?"good":"warn"}">Ran it down — it ${r.verdict}.</div>`
-          :`<button class="mini" data-act="rumorcheck" data-arg="${i}">Run it down (6h)</button>`}
-      </div>`).join("")}
-      <p class="tiny dim">Better analytics and a bigger department mean fewer stories that turn out to be nothing.</p>
-      </div></div>`:""}
     <div class="panel"><div class="ph"><h3>Assign work</h3>
       <span class="sub">${Math.round(t.scoutPts)}h left</span></div>
       <div class="pb stack">
@@ -5450,6 +5739,17 @@ function prospectSheet(pid){
         ${r.workout?`<tr><td class="muted">Room to grow</td><td class="n">${p.hidden.pot-p.ovr>12?"substantial":p.hidden.pot-p.ovr>5?"some":"limited"}</td></tr>`:""}
       </tbody></table>
     </div></div>
+    ${(S.rumors&&S.rumors.length)?`<div class="panel">
+      <div class="ph"><h3>The rumor mill</h3>
+        <span class="sub">${(S.rumorReliability||0.5)>=0.75?"our sources are good"
+          :(S.rumorReliability||0.5)>=0.55?"our sources are mixed":"take all of it lightly"}</span></div>
+      <div class="pb stack">${S.rumors.map((r,i)=>`<div class="note">
+        <div class="small">${esc(r.txt)}</div>
+        ${r.checked?`<div class="tiny ${r.true_?"good":"warn"}">Ran it down — it ${r.verdict}.</div>`
+          :`<button class="mini" data-act="rumorcheck" data-arg="${i}">Run it down (6h)</button>`}
+      </div>`).join("")}
+      <p class="tiny dim">Better analytics and a bigger department mean fewer stories that turn out to be nothing.</p>
+      </div></div>`:""}
     ${S.phase==="draft"&&onClock()&&onClock().team===S.userTeam?
       `<button class="btn primary big" data-act="pick" data-arg="${pid}">Draft ${esc(p.l)}</button>`:""}
   </div>`;
@@ -5467,6 +5767,13 @@ function playerSheet(pid){
   if(p.isProspect) return prospectSheet(pid);
   const t=p.teamId!==null?S.teams[p.teamId]:null;
   const own=t&&t.id===S.userTeam;
+  // On somebody else's active roster — a genuine trade target, not a free
+  // agent you could just sign and not a legend whose career is already
+  // public record. His real measurables stay behind the same kind of fog a
+  // draft prospect gets, until scouting hours buy a sharper read.
+  const fogged=!!(t&&!own);
+  if(fogged) ensureVetScout(pid);
+  const vg=fogged?vetGrade(pid):null;
   const s=p.stats||{}, ls=p.lastStats||{};
   // A retired player who's since become a coach still exists as his own
   // record (his career stats and Hall of Fame case depend on it) — but
@@ -5497,12 +5804,14 @@ function playerSheet(pid){
   <div class="sb stack">
     <div class="row"><button class="chip" data-act="addcompare" data-arg="${pid}">Compare</button></div>
     <div class="grid3">
-      <div class="stat"><b class="midnum">${p.ovr}</b><span>Overall</span></div>
+      <div class="stat"><b class="midnum">${fogged?(vg.k>=12?"≈"+Math.round(vg.est):"?"):p.ovr}</b>
+        <span>${fogged?"Our read":"Overall"}</span></div>
       <div class="stat"><b>${Math.floor(p.ht/12)}-${p.ht%12}</b><span>${p.wt} lbs</span></div>
       <div class="stat"><b>${p.contract?fmtM(p.contract.apy):"—"}</b><span>${p.contract?p.contract.left+" yrs left":"unsigned"}</span></div>
     </div>
     ${p.injury>0?`<div class="panel"><div class="pb"><span class="tag red">Out ${p.injury} weeks</span>
       <span class="small"> ${esc(p.injDesc)}</span></div></div>`:""}
+    ${fogged?vetScoutPanel(pid):`
     <div class="panel"><div class="ph"><h3>Attributes</h3></div><div class="pb stack">${attrs}</div></div>
     ${(()=>{
       const h=p.ovrHistory;
@@ -5514,7 +5823,7 @@ function playerSheet(pid){
         <span class="sub">${h.length} season${h.length>1?"s":""} tracked</span></div>
         <div class="pb tight"><table><thead><tr><th>Year</th><th class="n">Was</th>
           <th class="n">Now</th><th class="n">Δ</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
-    })()}
+    })()}`}
     ${(()=>{ const ct=contractTable(p); return ct?`<div class="panel">${ct}</div>`:""; })()}
     ${confidenceLine(p)}
     ${numbers?`<div class="panel"><div class="ph"><h3>Production</h3>
@@ -5562,7 +5871,7 @@ function playerSheet(pid){
         </div></div>`;})()}
     ${p.contract?`<div class="pb tight"><p class="tiny dim">${structureLabel(p)} ·
       ${fmtM(deadMoney(p))} dead if released${p.tagged===S.year?" · franchise tagged":""}</p></div>`:""}
-    ${(()=>{ const alt=bestOtherSpots(p,3).filter(x=>x.ovr>=Math.max(45,p.ovr-22));
+    ${fogged?"":(()=>{ const alt=bestOtherSpots(p,3).filter(x=>x.ovr>=Math.max(45,p.ovr-22));
       if(!alt.length) return "";
       return `<div class="pb tight"><div class="small" style="margin-bottom:4px">Elsewhere on the field</div>
         <table class="stat"><tbody>${alt.map(x=>`<tr${own?` class="click" data-act="switchpos" data-arg="${pid}" data-arg2="${x.pos}"`:""}>
@@ -5570,7 +5879,7 @@ function playerSheet(pid){
           <td class="dim">${x.d<=1?"a natural move":x.d<=2?"could learn it":"out of his depth"}</td>
           <td class="big">${x.ovr}</td></tr>`).join("")}</tbody></table>
         ${own?`<p class="tiny dim" style="margin-top:4px">Tap a row to move him there — this is a permanent switch, meant for filling a roster hole, not a preview.</p>`:""}</div>`;})()}
-    ${percentileLine(p)}
+    ${fogged?"":percentileLine(p)}
     ${own?`<div class="row wrap">
       ${p.contract&&p.contract.left<=1?`<button class="btn" data-act="extend" data-arg="${pid}">Offer extension</button>`:""}
       <button class="btn danger" data-act="cut" data-arg="${pid}"
@@ -5589,6 +5898,35 @@ function openSheet(html){
   document.body.style.overflow="hidden";
 }
 function closeSheet(){$("modal").innerHTML="";document.body.style.overflow="";}
+// ---- news recap after advancing the sim ----
+// advance()/sim4/simseason can touch a lot of systems in one go (a week of
+// games, contracts rolling over, an owner mood swing, a coach getting
+// poached), and it's easy for something that actually matters to your own
+// club to scroll off the bottom of "Around the league" before you ever see
+// it. This snapshots how much news existed before a sim step and, if any of
+// what got added since is personally yours, surfaces it in a dismissible
+// sheet right away instead of leaving it to be found later on the hub.
+function newsRecapHtml(items,truncated){
+  return `<div class="sh"><div><b>What happened to you</b>
+      <div class="dim small">${items.length} thing${items.length===1?"":"s"} worth a look</div></div>
+    <button class="x" data-act="closesheet">×</button></div>
+    <div class="sb tight">${items.map(n=>
+      `<div class="newsitem${n.pid!=null?" click":""}"${n.pid!=null?` data-act="player" data-arg="${n.pid}"`:""}>
+        <span class="w">${n.year}</span> ${esc(n.txt)}</div>`).join("")}
+      ${truncated?`<p class="tiny dim" style="padding:6px 10px">Older items are on the hub, under "Your team".</p>`:""}</div>`;
+}
+function showNewsRecap(sinceLen){
+  // A bigger moment (fired, a championship, the club changing hands) already
+  // takes over the same #modal slot via render(), right when advance() calls
+  // it — and that's the more important thing to see. Don't step on it.
+  const mo=$("modal");
+  if(mo&&mo.innerHTML) return;
+  const added=S.news.slice(0,Math.max(0,S.news.length-sinceLen));
+  const mine=added.filter(isMyNews);
+  if(!mine.length) return;
+  const CAP=30;
+  openSheet(newsRecapHtml(mine.slice(0,CAP),mine.length>CAP));
+}
 
 /* ============================ PANELS ============================ */
 function onClock(){ return S.draftOrder&&S.draftIdx<S.draftOrder.length?S.draftOrder[S.draftIdx]:null; }
@@ -5967,6 +6305,34 @@ const ACT={
     toast("Defensive back roles back to the coordinator's own read.");
     render();
   },
+  setlbrole:(slotIdx,pid,e)=>{
+    pid = e?.target?.value ?? pid;
+    const t=S.teams[S.userTeam];
+    t.lbRolesManual=t.lbRolesManual||{};
+    if(!pid){ delete t.lbRolesManual[slotIdx]; }
+    else t.lbRolesManual[slotIdx]=+pid;
+    render();
+  },
+  clearlbroles:()=>{
+    const t=S.teams[S.userTeam];
+    t.lbRolesManual={};
+    toast("Linebacker roles back to the coordinator's own read.");
+    render();
+  },
+  setrbrole:(role,pid,e)=>{
+    pid = e?.target?.value ?? pid;
+    const t=S.teams[S.userTeam];
+    t.rbRolesManual=t.rbRolesManual||{};
+    if(!pid){ delete t.rbRolesManual[role]; }
+    else t.rbRolesManual[role]=+pid;
+    render();
+  },
+  clearrbroles:()=>{
+    const t=S.teams[S.userTeam];
+    t.rbRolesManual={};
+    toast("Running back roles back to the coordinator's own read.");
+    render();
+  },
   adddepth:(pos,pid,e)=>{
     pid = e?.target?.value || pid;
     if(!pid) return;
@@ -6011,13 +6377,21 @@ const ACT={
   veil:(a,e,ev)=>{ if(!ev.target.classList.contains("veil")) return;
     if(typeof autoFinishLive==="function") autoFinishLive();
     closeSheet(); render(); },
-  advance:()=>advance(),
+  advance:()=>{ const before=S.news.length; advance(); showNewsRecap(before); },
   doscout:(a,b)=>{
     const res=doScout(+a,b,S.activeScout);
     toast(res.msg);
     if(res.ok){openSheet(prospectSheet(+a));}
   },
+  dovetscout:(a,b)=>{
+    const res=doVetScout(+a,b,S.activeScout);
+    toast(res.msg);
+    if(res.ok){openSheet(playerSheet(+a));}
+  },
   setscout:(a,b,ev)=>{S.activeScout=+ev.target.value;render();},
+  toggleautoscout:()=>{ const t=S.teams[S.userTeam]; t.autoScout=!t.autoScout;
+    toast(t.autoScout?"Auto-scouting unspent hours from now on.":"Auto-scouting turned off.");
+    render(); },
   ssort:(a,b,ev)=>{V.scoutSort=ev.target.value;render();},
   sonly:(a,b,ev)=>{V.scoutOnly=ev.target.value;render();},
   pick:a=>{
@@ -6180,7 +6554,9 @@ const ACT={
     toast(`${sc.name} looked at ${pool.length} names${flagged.length?`; worth another look: ${names.join(", ")}`:""}.`);
     render();
   },
-  sim4:()=>{ for(let i=0;i<4&&S.phase==="regular"&&S.week<=WEEKS;i++) advance(); },
+  sim4:()=>{ const before=S.news.length;
+    for(let i=0;i<4&&S.phase==="regular"&&S.week<=WEEKS;i++) advance();
+    showNewsRecap(before); },
   simseason:()=>{
     // The full 25-week loop ran as one uninterrupted synchronous block —
     // measured at ~6.6 seconds of continuous main-thread work, well past
@@ -6194,12 +6570,14 @@ const ACT={
     // season actually advance instead of a frozen screen that jumps to the
     // end.
     toast("Simulating to the playoffs…");
+    const before=S.news.length;
     const chunk=3;
     function stepChunk(){
       let g=0;
       while(g<chunk && S.phase==="regular" && S.week<=WEEKS){ advance(); g++; }
       render();
       if(S.phase==="regular" && S.week<=WEEKS) setTimeout(stepChunk,0);
+      else showNewsRecap(before);
     }
     setTimeout(stepChunk,0);
   },
@@ -6226,14 +6604,23 @@ document.addEventListener("click",e=>{
     // (and its render()) runs, means every click gets a moment of visible
     // confirmation first, win or fail, instead of just silently happening.
     el.classList.add("tap-flash");
-    setTimeout(()=>{
+    // A flat 90ms wait was enough to guarantee the flash actually painted
+    // before the handler's render() tore down and rebuilt the DOM under it —
+    // but 90ms on every single click in the app is well past the point
+    // where a person feels it as the app being slow, not as a confirmation
+    // beat. All that's actually needed is "let the browser paint the flash
+    // before doing anything else," which is one frame away, not 90ms away.
+    // Two nested rAFs are the standard way to guarantee a frame has been
+    // drawn: the first fires right before the next paint, the second only
+    // after that paint has happened — normally under 20ms on a live page.
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
       // Nothing between a click and its handler used to catch a thrown error —
       // one bad ACT call would just vanish with no explanation, leaving the
       // person staring at a screen that silently did nothing. Every action now
       // fails into a message instead of into the void.
       try{ fn(el.dataset.arg,el.dataset.arg2,e); }
       catch(err){ console.error(el.dataset.act,err); toast("That didn't go through — try again."); }
-    },90);
+    }));
   }
 });
 document.addEventListener("change",e=>{
@@ -6387,7 +6774,7 @@ function fillRosterFromFA(t,quiet){
     const price=Math.max(minSalary(),Math.min(room,Math.round(marketAPY(p)*0.82)));
     signPlayer(p,t.id,price,p.ovr>=70?ri(1,3):1,.15); addToTeam(p,t); added++;
   }
-  if(added&&!quiet) news(`Front office filled ${added} roster spots with minimum deals.`,"info");
+  if(added&&!quiet) news(`Front office filled ${added} roster spots with minimum deals.`,"info",null,t.id);
   return added;
 }
 /* the league has a spending floor — clubs sitting on it get pushed into the market */
@@ -6532,10 +6919,11 @@ function startSeason(){
       if(want){ want.salary=want.asking; t.staff[role]=want;
         S.staffMarket=(S.staffMarket||[]).filter(x=>x.id!==want.id); }
       else t.staff[role]=makeCoach(role);
-      news(`With the chair still open, the front office hired ${esc(t.staff[role].name)} as ${role}.`,"info");
+      news(`With the chair still open, the front office hired ${esc(t.staff[role].name)} as ${role}.`,"info",null,t.id);
     }
   }
   trimFreeAgentSurplus();
+  pruneVetScout();
   news(`${S.year} season kicks off. Next year's class is on the board.`,"info");
 }
 
@@ -6546,7 +6934,7 @@ function advance(){
   const t=S.teams[S.userTeam];
   switch(S.phase){
     case "regular":
-      if(S.week<=WEEKS){ tickHoldouts(); playWeek(); grantScoutPts(); aiManageIR(); psDevelop(); poachPracticeSquads(); }
+      if(S.week<=WEEKS){ tickHoldouts(); playWeek(); grantScoutPts(); if(t.autoScout) autoScoutHours(t); aiManageIR(); psDevelop(); poachPracticeSquads(); aiToAiTrades(); }
       runAutoJobs();
       ownerInSeason();
       buildDigest();
@@ -6559,7 +6947,7 @@ function advance(){
     case "postseason":{
       const champ=simPlayoffs();
       buildDraftOrder();
-      news(`${champ.city} ${champ.name} win the championship.`,"playoff");
+      news(`${champ.city} ${champ.name} win the championship.`,"playoff",null,champ.id===S.userTeam?S.userTeam:null);
       if(champ.id===S.userTeam)
         raiseMoment("win","Champions",`${champ.city} ${champ.name}`,
           `${S.year}. Whatever else happens, they can't take this one off you.`);
@@ -6576,6 +6964,7 @@ function advance(){
       aiStaffChurn();
       tapeRetrospective();
       aiTradeApproach();
+      aiToAiTrades(); aiToAiTrades();
       seasonAwards();
       clearIR();
       updatePrestige();
@@ -6622,6 +7011,7 @@ function advance(){
     case "predraft":
       S.predraftWeek=(S.predraftWeek||1)+1;
       t.scoutPts+=Math.round(scoutBudget(t)*2.2);
+      if(t.autoScout) autoScoutHours(t);
       if(S.predraftWeek>4){
         buildDraftOrder();   // rebuilt now, so trades made during the pre-draft window count
         S.phase="draft"; advanceDraftToUser();
@@ -6834,9 +7224,9 @@ function newGame(teamId,seed){
   if(st.mode==="custom"&&st.ownerPick&&MANDATES[st.ownerPick]) S.owner.mandate=st.ownerPick;
   S.setupPoints=st.upgrades||0;
   const own=MANDATES[S.owner.mandate];
-  news(`You've taken over the ${S.teams[S.userTeam].city} ${S.teams[S.userTeam].name}.`,"info");
-  news(`The owner's brief: "${own.blurb}"`,"info");
-  news("Next spring's draft class is already on the board. Start looking now.","info");
+  news(`You've taken over the ${S.teams[S.userTeam].city} ${S.teams[S.userTeam].name}.`,"info",null,S.userTeam);
+  news(`The owner's brief: "${own.blurb}"`,"info",null,S.userTeam);
+  news("Next spring's draft class is already on the board. Start looking now.","info",null,S.userTeam);
 }
 function teamPicker(){
   const LIST=teamList();
@@ -6878,7 +7268,7 @@ ACT.setupdone=()=>{
   if(left>0){
     const cash=Math.round(left*40e6*capScale());
     t.cash+=cash;
-    news(`${left} unspent upgrade${left>1?"s":""} taken as ${fmtM(cash)} in cash.`,"info");
+    news(`${left} unspent upgrade${left>1?"s":""} taken as ${fmtM(cash)} in cash.`,"info",null,t.id);
   }
   S.setupPoints=0; closeSheet(); render();
 };
@@ -7073,14 +7463,14 @@ function settleBooks(){
       const draw=Math.round((t.cash-reserve)*0.45);
       t.cash-=draw;
       if(t.id===S.userTeam) news(`The owner took ${fmtM(draw)} out of the club this year. ` +
-        `Money left sitting is money he assumes you don't need.`,"info");
+        `Money left sitting is money he assumes you don't need.`,"info",null,t.id);
     }
     t.books.unshift({year:S.year, rev:rev.total, exp:exp.total, net, w:t.w, l:t.l});
     if(t.books.length>12) t.books.length=12;
     if(t.id===S.userTeam){
       news(`${S.year} books closed: ${fmtM(rev.total)} in, ${fmtM(exp.total)} out — ` +
            `${net>=0?"a "+fmtM(net)+" profit":fmtM(-net)+" in the red"}. ` +
-           `${fmtM(t.cash)} on hand.`, net>=0?"info":"loss");
+           `${fmtM(t.cash)} on hand.`, net>=0?"info":"loss", null, t.id);
     }
     // the AI reinvests when it can
     if(t.id!==S.userTeam) aiSpend(t);
@@ -7198,12 +7588,18 @@ function setScoutInvest(t,mil){
 }
 
 /* ---------- the trade market ---------- */
-function assetLabel(a){
+function assetLabel(a,fog){
   if(a.type==="pick"){
     const own = a.orig===a.holder;
     return `${a.year} round ${a.round}${own?"":` <span class="dim small">(${S.teams[a.orig].abbr})</span>`}`;
   }
   const p=S.players[a.pid];
+  if(fog){
+    ensureVetScout(p.id);
+    const g=vetGrade(p.id);
+    const read=g.k>=12?`≈${Math.round(g.est)} ovr`:"not evaluated";
+    return `${posTag(p.pos)} ${esc(p.l)} <span class="dim small">${read} · ${p.age}</span>`;
+  }
   return `${posTag(p.pos)} ${esc(p.l)} <span class="dim small">${p.ovr} ovr · ${p.age}</span>`;
 }
 function assetValue(a){
@@ -7279,7 +7675,15 @@ function executeTrade(a,b,aGive,bGive){
   autoDepth(a); autoDepth(b);
   const desc=(assets)=>assets.map(x=>x.type==="player"
     ? `${S.players[x.pid].pos} ${S.players[x.pid].l}` : `${x.year} R${x.round}`).join(", ");
-  news(`Trade with ${b.city}: out ${desc(aGive)||"nothing"} — in ${desc(bGive)||"nothing"}.`,"trade");
+  // Phrased from whichever side is you, when you're one of the two sides —
+  // otherwise it's just two clubs making a move, which is league news, not yours.
+  if(a.id===S.userTeam)
+    news(`Trade with ${b.city}: out ${desc(aGive)||"nothing"} — in ${desc(bGive)||"nothing"}.`,"trade");
+  else if(b.id===S.userTeam)
+    news(`Trade with ${a.city}: out ${desc(bGive)||"nothing"} — in ${desc(aGive)||"nothing"}.`,"trade");
+  else
+    news(`${a.city} and ${b.city} make a deal: ${a.abbr} send ${desc(aGive)||"nothing"} for ${desc(bGive)||"nothing"}.`,"league");
+  return true;
 }
 
 /* AI clubs come to you when they want something badly enough */
@@ -7307,6 +7711,49 @@ function aiTradeApproach(){
     news(`${t.city} called about ${p.pos} ${p.l}. There's an offer on your desk.`,"trade",p.id);
     return;
   }
+}
+
+/* the rest of the league keeps trading even when you're not the one on the
+   phone — a seller (rebuilding, or just deep at a spot) moves a player for
+   picks to a contender who actually needs him, the same shape of deal the
+   AI offers you above, just between two clubs that aren't you. */
+function aiToAiTrades(){
+  if(!tradesOpen()) return;
+  const pool=S.teams.filter(t=>t.id!==S.userTeam);
+  if(pool.length<2) return;
+  // Six random pairings a week, not three — three almost never landed on a
+  // seller and a buyer who both actually wanted the same deal (verified by
+  // simulating a season: with the original three-attempt, need>32 version
+  // this fired zero times across a full 32-team season). A need score above
+  // 20 is already the same "worth targeting" bar shown on every opponent's
+  // team page and the trade club-picker, so this isn't a new bar, just the
+  // one already visible everywhere else.
+  for(let attempt=0;attempt<6;attempt++){
+    const seller=pick(pool);
+    const sellable=seller.roster.map(id=>S.players[id])
+      .filter(p=>p&&!p.retired&&!p.holdout&&p.ovr>=68&&p.age<=32
+        &&(seller.ai.winNow<0.45||needScore(seller,p.pos)<10))
+      .sort((a,b)=>playerTradeValue(b)-playerTradeValue(a));
+    if(!sellable.length) continue;
+    const p=pick(sellable.slice(0,6));
+    const buyers=S.teams.filter(t=>t.id!==seller.id&&t.id!==S.userTeam
+      &&needScore(t,p.pos)>20&&t.ai.winNow>0.5);
+    if(!buyers.length) continue;
+    const buyer=pick(buyers);
+    const want=playerTradeValue(p)*(1.05+seller.ai.aggression*0.16);
+    const cand=buyer.picks.filter(pk=>pk.year<=S.year+2)
+      .map(pk=>({a:{type:"pick",year:pk.year,round:pk.round,orig:pk.orig,holder:buyer.id},v:pickValue(pk.round,16)}))
+      .sort((x,y)=>y.v-x.v);
+    const give=[]; let acc=0;
+    for(const c of cand){ if(acc>=want) break; give.push(c.a); acc+=c.v; }
+    if(acc<want*0.8||!give.length) continue;
+    const aGive=[{type:"player",pid:p.id,holder:seller.id}];
+    if(tradeLegal(seller,buyer,aGive,give)) continue;
+    if(!tradeVerdict(seller,aGive,give).accept) continue;
+    executeTrade(seller,buyer,aGive,give);
+    return true;
+  }
+  return false;
 }
 
 /* ---------- the long memory of a draft board ---------- */
@@ -7532,12 +7979,12 @@ function tradeState(){
   return V.trade;
 }
 function inList(list,a){ return list.some(x=>assetKey(x)===assetKey(a)); }
-function assetPickerRows(assets,selected,side){
+function assetPickerRows(assets,selected,side,fog){
   return assets.map(a=>{
     const on=inList(selected,a);
     return `<tr class="click ${on?"":""}" data-act="tradetoggle" data-arg="${side}" data-arg2="${assetKey(a)}">
       <td style="width:26px">${on?'<span class="num o">✓</span>':'<span class="num d">·</span>'}</td>
-      <td>${assetLabel(a)}</td>
+      <td>${assetLabel(a,fog)}</td>
       </tr>`;
   }).join("");
 }
@@ -7547,7 +7994,8 @@ const SCREENS_TRADE=function(){
     const rows=S.teams.filter(t=>t.id!==u.id)
       .map(t=>`<tr class="click" data-act="tradepartner" data-arg="${t.id}">
         <td><span class="crest sm" style="background:${t.color}">${t.abbr}</span></td>
-        <td>${esc(t.city)} ${esc(t.name)}</td>
+        <td>${esc(t.city)} ${esc(t.name)}
+          <div class="tiny dim">Need: ${teamNeedsBlurb(t,2)}</div></td>
         <td class="n dim small">${t.w}-${t.l}</td>
         <td class="n dim small">${fmtM(capSpace(t))}</td></tr>`).join("");
     const inbox=(S.tradeInbox||[]);
@@ -7576,6 +8024,7 @@ const SCREENS_TRADE=function(){
   return `<div class="panel"><div class="ph">
       <h3>${esc(t.city)} ${esc(t.name)}</h3>
       <span class="sub"><button class="chip" data-act="tradeback">Change club</button></span></div>
+    <div class="pb tight"><p class="tiny dim">Need: <b>${teamNeedsBlurb(t)}</b></p></div>
     <div class="pb">
       <div class="callout ${both&&!illegal&&v.accept?"green":"warn"}">${mood}</div>
       <div class="row spread small">
@@ -7595,9 +8044,10 @@ const SCREENS_TRADE=function(){
       ${assetPickerRows(mineA.players,st.mine,"mine")}
     </tbody></table></div>
     <div class="ph"><h3>They send</h3></div>
+    <div class="pb tight"><p class="tiny dim">Ovr shown for their side is our scouted read, not their real file — visit their roster to spend hours on someone specific.</p></div>
     <div class="scroll" style="max-height:230px"><table><tbody>
       ${assetPickerRows(theirsA.picks,st.theirs,"theirs")}
-      ${assetPickerRows(theirsA.players,st.theirs,"theirs")}
+      ${assetPickerRows(theirsA.players,st.theirs,"theirs",true)}
     </tbody></table></div>
   </div>`;
 };
@@ -7612,7 +8062,7 @@ Object.assign(ACT,{
     const cost=facCost(t,k);
     if(t.cash<cost){toast("Not enough cash.");return;}
     t.cash-=cost; t.fac[k]++;
-    news(`${FACS[k].name} upgraded to level ${t.fac[k]} — ${fmtM(cost)}.`,"info");
+    news(`${FACS[k].name} upgraded to level ${t.fac[k]} — ${fmtM(cost)}.`,"info",null,t.id);
     toast(`${FACS[k].short} now level ${t.fac[k]}.`); render();
   },
   scoutinvest:v=>{ setScoutInvest(S.teams[S.userTeam],+v); render(); },
@@ -7958,14 +8408,31 @@ function assignLBRoles(t){
   const labels=(frontLabelsFor(t).LB)||["Linebacker","Linebacker","Linebacker"];
   const pool=(t.depth&&t.depth.LB||[]).map(id=>S.players[id]).filter(Boolean);
   const used=new Set();
-  const slots=labels.map(lbl=>{
+  // A user override sticks per labeled slot (not per role — a front can list
+  // the same role twice, e.g. two Outside linebacker slots) until cleared or
+  // the man himself can't go, the same convention the DB roles above use.
+  const manual=t.lbRolesManual||{};
+  // Every manual pick has to be reserved BEFORE any slot auto-fills — doing
+  // it in one pass, slot by slot, meant an earlier slot's auto-pick could
+  // claim the very man a later slot was manually set to, since nothing had
+  // reserved him yet. A user's override for slot 2 lost quietly to slot 0's
+  // auto-fill grabbing the same man first. Two passes: lock in everyone
+  // forced, in whatever slot order, then auto-fill only what's left.
+  const forced={};
+  labels.forEach((lbl,i)=>{
+    const forcedId=manual[i]; if(!forcedId) return;
+    const f=pool.find(x=>x.id===forcedId&&!used.has(x.id));
+    if(f){ used.add(f.id); forced[i]=f; }
+  });
+  const slots=labels.map((lbl,i)=>{
     const role=lbSlotRole(lbl);
-    const cand=pool.filter(p=>!used.has(p.id))
+    if(forced[i]) return {label:lbl, role, p:forced[i], slotIdx:i, manual:true};
+    const cand=pool.filter(x=>!used.has(x.id))
       .sort((a,b)=>roleGrade(b,role,'ovr',LB_ROLE_WEIGHTS)-roleGrade(a,role,'ovr',LB_ROLE_WEIGHTS));
     const p=cand[0]||null; if(p) used.add(p.id);
-    return {label:lbl, role, p};
+    return {label:lbl, role, p, slotIdx:i, manual:false};
   });
-  const leftover=pool.filter(p=>!used.has(p.id)).map(p=>({label:"Linebacker depth",role:null,p}));
+  const leftover=pool.filter(p=>!used.has(p.id)).map(p=>({label:"Linebacker depth",role:null,p,slotIdx:null,manual:false}));
   return slots.concat(leftover);
 }
 /* Same distinction for the backfield — an every-down/early-down runner and a
@@ -7973,16 +8440,28 @@ function assignLBRoles(t){
    "Third-down back" scouting trait, which stays fogged until discovered). */
 function assignRBRoles(t){
   const pool=(t.depth&&t.depth.RB||[]).map(id=>S.players[id]).filter(Boolean);
-  if(!pool.length) return {early:null, third:null, rest:[]};
+  if(!pool.length) return {early:null, third:null, rest:[], earlyManual:false, thirdManual:false};
   const used=new Set();
-  const early=pool.slice().sort((a,b)=>roleGrade(b,"EARLY",'ovr',RB_ROLE_WEIGHTS)-roleGrade(a,"EARLY",'ovr',RB_ROLE_WEIGHTS))[0];
-  if(early) used.add(early.id);
-  const thirdCand=pool.filter(p=>!used.has(p.id));
-  const third=(thirdCand.length?thirdCand:pool).slice()
-    .sort((a,b)=>roleGrade(b,"THIRD",'ovr',RB_ROLE_WEIGHTS)-roleGrade(a,"THIRD",'ovr',RB_ROLE_WEIGHTS))[0]||null;
-  if(third) used.add(third.id);
+  const manual=t.rbRolesManual||{};
+  // Same two-pass fix as the linebacker roles above: reserve every forced
+  // pick first, for both roles, before either one auto-fills — otherwise
+  // resolving EARLY before THIRD could let EARLY's auto-pick claim the man
+  // THIRD was manually set to, since he hadn't been reserved yet.
+  const forced={};
+  for(const role of ["EARLY","THIRD"]){
+    const forcedId=manual[role]; if(!forcedId) continue;
+    const f=pool.find(x=>x.id===forcedId&&!used.has(x.id));
+    if(f){ used.add(f.id); forced[role]=f; }
+  }
+  const pick=(role)=>{
+    if(forced[role]) return {p:forced[role], manual:true};
+    const cand=pool.filter(x=>!used.has(x.id)).sort((a,b)=>roleGrade(b,role,'ovr',RB_ROLE_WEIGHTS)-roleGrade(a,role,'ovr',RB_ROLE_WEIGHTS));
+    const p=cand[0]||null; if(p) used.add(p.id);
+    return {p,manual:false};
+  };
+  const earlyR=pick("EARLY"), thirdR=pick("THIRD");
   const rest=pool.filter(p=>!used.has(p.id));
-  return {early, third, rest};
+  return {early:earlyR.p, earlyManual:earlyR.manual, third:thirdR.p, thirdManual:thirdR.manual, rest};
 }
 function schemeFit(p,atPos){
   // atPos lets a coach ask "how would his game play in THIS scheme's version
@@ -8074,7 +8553,7 @@ function ownerReview(){
   const mood = S.owner.patience>=75?"delighted":S.owner.patience>=55?"satisfied"
              : S.owner.patience>=35?"restless":S.owner.patience>=18?"openly unhappy":"finished with you";
   news(`The owner is ${mood} after ${t.w}-${t.l}. ${delta>=0?"+":""}${delta} on your standing with him.`,
-       delta>=0?"info":"loss");
+       delta>=0?"info":"loss", null, t.id);
   if(S.owner.patience<=Math.max(0,-ownerRope())){
     S.owner.fired=true;
     if(S.career){ S.career.firedFrom=S.career.firedFrom||[];
@@ -8109,7 +8588,8 @@ function logSeasonRecords(){
       S.records.season[k]=best;
       if(cur){
         const label=RECORD_CATS.find(c=>c[0]===k)[1].toLowerCase();
-        news(`${best.name} breaks the league record for ${label} — ${best.v}.`,"info",best.id);
+        news(`${best.name} breaks the league record for ${label} — ${best.v}.`,"info",best.id,
+          S.players[best.id]?S.players[best.id].teamId:null);
         if(S.players[best.id]&&S.players[best.id].teamId===S.userTeam)
           raiseMoment("win","A league record",best.name,
             `${best.v} ${label} in a season. Nobody has ever done that.`);
@@ -8205,7 +8685,8 @@ function hallOfFameIntake(retirees){
     S.hall.push({id:p.id, name:`${p.f} ${p.l}`, pos:p.pos, score:sc, year:S.year,
       career:Object.assign({},p.career||{}),
       team:p.career&&p.career.usYears>=4?S.teams[S.userTeam].abbr:(p.lastTeam||"")});
-    news(`${p.pos} ${p.f} ${p.l} is elected to the Hall of Fame.`,"info");
+    news(`${p.pos} ${p.f} ${p.l} is elected to the Hall of Fame.`,"info",p.id,
+      (p.draft&&p.draft.pickedBy===S.userTeam)?S.userTeam:null);
     if(p.draft&&p.draft.pickedBy===S.userTeam&&S.career) S.career.hof++;
   }
   S.hall.sort((a,b)=>b.score-a.score);
@@ -8307,7 +8788,7 @@ function evolveMandate(){
     o.mandate=next;
     o.grace=Math.max(o.grace||0,1);      // a new brief comes with a little room
     o.changed=S.year;
-    news(`The owner has changed what he wants: ${MANDATES[next].name}. "${why}"`,"info");
+    news(`The owner has changed what he wants: ${MANDATES[next].name}. "${why}"`,"info",null,S.userTeam);
   }
 }
 
@@ -8383,7 +8864,7 @@ function driftOwnerTraits(){
         purse:         up?"has opened his wallet":"has gone quiet about money",
         temper:        up?"is quicker to anger than he was":"has calmed down"
       }[k];
-      news(`The owner ${line}.`, up?"info":"loss");
+      news(`The owner ${line}.`, up?"info":"loss", null, S.userTeam);
     }
   }
 }
@@ -9009,7 +9490,7 @@ function staffNoticeSynergies(p,team){
     if(rnd()<eye*snaps){
       p.synSeen.push(k);
       if(team.id===S.userTeam)
-        news(`${coach.name} on ${p.pos} ${p.l}: "${SYNERGIES[k].hint}"`,"info",p.id);
+        news(`${coach.name} on ${p.pos} ${p.l}: "${SYNERGIES[k].hint}"`,"info",p.id,team.id);
     }
   }
 }
@@ -9249,7 +9730,7 @@ function ownerTenureRoll(){
   S.owner.grace = kind==="family"?1:2;
   S.owner.tenure=0;
   const m=MANDATES[S.owner.mandate];
-  news(`${blurb} His brief: "${m.blurb}"`,"info");
+  news(`${blurb} His brief: "${m.blurb}"`,"info",null,S.userTeam);
   raiseMoment(kind==="family"?"":"win", "The club changes hands", name, blurb);
 }
 /* AI clubs change hands too, quietly */
@@ -9434,7 +9915,7 @@ function generateJobOffers(){
     .sort(()=>rnd()-0.5).slice(0,n);
   for(const t of candidates) S.jobOffers.push(buildJobOffer(t));
   if(S.jobOffers.length)
-    news(`${S.jobOffers.length===1?"A club has":"Clubs have"} been in touch about their general manager job.`,"info");
+    news(`${S.jobOffers.length===1?"A club has":"Clubs have"} been in touch about their general manager job.`,"info",null,S.userTeam);
 }
 function acceptJob(i){
   const o=(S.jobOffers||[])[+i];
@@ -9459,8 +9940,8 @@ function acceptJob(i){
   S.activeScout=to.scouts[0]?to.scouts[0].id:null;
   S.userOffers={}; S.shopOffers=null; S.tradeInbox=[]; S.jobOffers=[];
   V.viewTeam=null; V.screen="hub";
-  news(`You've left ${from.city} to take over the ${to.city} ${to.name}.`,"info");
-  news(`Your new owner: ${esc(to.ownerName||"the owner")} — "${MANDATES[S.owner.mandate].blurb}"`,"info");
+  news(`You've left ${from.city} to take over the ${to.city} ${to.name}.`,"info",null,to.id);
+  news(`Your new owner: ${esc(to.ownerName||"the owner")} — "${MANDATES[S.owner.mandate].blurb}"`,"info",null,to.id);
   return true;
 }
 function jobOfferSheet(){
@@ -9969,7 +10450,7 @@ function enforceCap(only,opts){
       t.deadCap=(t.deadCap||0)-short;
       t.deadCapNext=(t.deadCapNext||0)+Math.round(short*1.1);   // it costs to defer
       if(t.id===S.userTeam)
-        news(`${fmtM(short)} of dead money deferred to next season to get compliant.`,"info");
+        news(`${fmtM(short)} of dead money deferred to next season to get compliant.`,"info",null,t.id);
     }
   }
 }
