@@ -313,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--tea
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.20";
+const APP_VERSION = "0.25";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -1086,9 +1086,13 @@ function posDistance(from,to){
 const SPECIALIST=["K","P"];
 function ovrAt(p,pos){
   if(p.pos===pos) return p.ovr;
-  // his attributes barely move, so work each spot out once and keep it
-  if(p._at&&p._at.k===p.ovr){ const v=p._at[pos]; if(v!==undefined) return v; }
-  else p._at={k:p.ovr};
+  // his attributes barely move, so work each spot out once and keep it —
+  // but a coordinator change alters how a scheme grades him elsewhere, so
+  // the cache key carries the current OC/DC schemes too.
+  const t=p.teamId!==null&&p.teamId!==undefined?S.teams[p.teamId]:null;
+  const ck = p.ovr+"|"+(t?schemeOf(t,"OC")+","+schemeOf(t,"DC"):"");
+  if(p._at&&p._at.k===ck){ const v=p._at[pos]; if(v!==undefined) return v; }
+  else p._at={k:ck};
   const val=ovrAtRaw(p,pos);
   p._at[pos]=val;
   return val;
@@ -1103,7 +1107,13 @@ function ovrAtRaw(p,pos){
   // A generic mismatch (d=5, e.g. a quarterback at corner) was only costing
   // about 12 points off his rating — not nearly enough to keep a roster from
   // routinely stacking a depth chart with players out of position rather
-  // than carrying (or signing) someone who actually plays the spot.
+  // than carrying (or signing) someone who actually plays the spot. Even at
+  // the closest positional cousins (d=1 — a safety at linebacker, an EDGE at
+  // DT), the penalty rounded to about 3-4 points, meaning a merely-good
+  // safety could out-score a perfectly adequate natural linebacker just by
+  // being the better all-around athlete. Coaches should default hard to a
+  // man's real position; playing him elsewhere should take a real gap in
+  // talent, not a marginal one.
   // A career backup and a ten-year starter at the same job were also treated
   // as equally movable — years of reps at one spot build a specific comfort
   // and pattern-recognition there that doesn't just transfer because the
@@ -1111,7 +1121,17 @@ function ovrAtRaw(p,pos){
   // more that unfamiliarity should cost him elsewhere, capped so it isn't
   // unbounded for a true long-tenured veteran.
   const tenureFactor=clamp(1+(p.exp||0)*0.055,1,2.1);
-  const unfamiliar = d*3.6*tenureFactor * (1 - clamp(((p.a.awr||55)-50)/110,0,0.42));
+  let unfamiliar = d*13*tenureFactor * (1 - clamp(((p.a.awr||55)-50)/110,0,0.42));
+  // Scheme fit is the one thing that can still nudge a coach toward playing
+  // a man off his natural spot — a safety whose cover skills are exactly
+  // what the defensive coordinator's front asks of a linebacker there
+  // shaves a little off the unfamiliarity tax; a bad scheme match adds to
+  // it. It's a tie-breaker, not a talent gap: capped well under what the
+  // base penalty itself runs, so a real difference in ability still wins.
+  if(typeof schemeFit==="function"){
+    const fitAdj = (schemeFit(p,pos)-50)*0.09;
+    unfamiliar = Math.max(0, unfamiliar - fitAdj);
+  }
   return Math.max(20, Math.round(raw - unfamiliar));
 }
 function posScore(p,pos){
@@ -1218,24 +1238,54 @@ const DEF_ROLE_WEIGHTS={
       blitz:{prs:.24,spd:.15,acc:.12,agi:.09,awr:.18,str:.13,tak:.09},
       deep:{cov:.32,awr:.27,spd:.17,jmp:.07,agi:.07,acc:.10}}
 };
-function roleGrade(p,role,metric){
+function roleGrade(p,role,metric,table){
   if(!p) return 20;
-  const r=DEF_ROLE_WEIGHTS[role]||DEF_ROLE_WEIGHTS.NB, a=p.a||{};
+  table=table||DEF_ROLE_WEIGHTS;
+  const r=table[role]||table[Object.keys(table)[0]], a=p.a||{};
   const w=r[metric]||r.ovr; let total=0,wsum=0;
   for(const k in w){ if(a[k]!==undefined){ total+=a[k]*w[k]; wsum+=w[k]; } }
   return clamp(wsum?total/wsum:50,20,99);
 }
-function functionalOVR(p,role){
+function functionalOVR(p,role,table){
   if(!p) return 0;
-  const r=DEF_ROLE_WEIGHTS[role];
+  table=table||DEF_ROLE_WEIGHTS;
+  const r=table[role];
   if(!r) return p.ovr;
-  const fit=roleGrade(p,role,'ovr');
-  const roleBonus=p.pos===(role==='NB'||role==='BN'?'CB':'S')?2:0;
+  const fit=roleGrade(p,role,'ovr',table);
+  const roleBonus=table===DEF_ROLE_WEIGHTS?(p.pos===(role==='NB'||role==='BN'?'CB':'S')?2:0):0;
   return Math.round(clamp(fit+roleBonus,20,99));
 }
 function roleOVRs(p){
   return {NB:functionalOVR(p,'NB'),FS:functionalOVR(p,'FS'),SS:functionalOVR(p,'SS'),BN:functionalOVR(p,'BN')};
 }
+/* ---------- inside vs. outside linebacker ----------
+   The stored "LB" position and rating cover the whole linebacker room, but a
+   run-thumping inside backer and a rangy, rush-capable outside backer are
+   asking for different things out of the same 20 attributes. The depth
+   chart used to rank the whole room once by raw fit-adjusted overall and
+   then slap "Middle linebacker"/"Outside linebacker" labels on by list
+   position — so a merely-good all-around linebacker could get labeled the
+   starting Mike over a real run-stuffer just by out-ranking him overall,
+   and a two-way, sideline-to-sideline athlete could get buried behind him
+   at a spot that never asked for his actual strengths. These weight
+   tables (visible attributes only — no scouting-fog trait leaks into this)
+   let each labeled slot get graded on what it actually needs. */
+const LB_ROLE_WEIGHTS={
+  ILB:{ovr:{tak:.30,str:.18,awr:.20,spd:.10,cov:.10,prs:.10,dur:0}},
+  OLB:{ovr:{cov:.22,spd:.20,prs:.20,tak:.16,awr:.17,str:.05,dur:0}}
+};
+/* ---------- early-down back vs. third-down back ----------
+   Same idea for the backfield: a between-the-tackles runner and a
+   receiving/protection specialist are different jobs, but the depth chart
+   only ever showed one undifferentiated RB1-RB4 list ranked by overall.
+   The passing game already knows how to find a buried receiving specialist
+   (see usageShares' rb4 lookup) — this just makes that same distinction
+   visible on the chart itself, off plain attributes, not the hidden
+   "Third-down back" scouting trait. */
+const RB_ROLE_WEIGHTS={
+  EARLY:{ovr:{trk:.28,elu:.18,spd:.16,str:.14,awr:.12,cth:.06,dur:.06}},
+  THIRD:{ovr:{cth:.30,elu:.18,agi:.15,awr:.17,spd:.10,pbk:.10,dur:0}}
+};
 function defensiveRoleScore(p,role){
   if(!p) return -Infinity;
   const r=role==='bigNickel'?'BN':role;
@@ -2979,9 +3029,30 @@ function* simGamePlay(g,neutral){
     // above realistic even for players whose actual role wouldn't produce
     // many. Sacks are excluded too since they already credit their own
     // tackle above — this was double-counting those as two tackles.
+    // That fixed the incompletion leak, but the remaining lottery still
+    // pulled from all 11 defenders by raw tackling alone, with zero regard
+    // for play type — a pass-rushing EDGE, nowhere near a catch 20 yards
+    // downfield, was exactly as live a candidate to "make the tackle" as
+    // the man who was actually covering that target. Real football doesn't
+    // work that way: on a completed pass, the coverage defender on that
+    // specific target (already computed above as coverDef) is overwhelmingly
+    // the one who brings him down, not whoever on the field has the best
+    // tak rating. On a run play, the front seven (DT/LB, with EDGE in a
+    // supporting contain role) are the realistic first hitters; corners and
+    // safeties are mostly relevant once a run gets outside or into open
+    // space, not on an inside carry.
     if(!turnover&&!passSack&&gain<20&&(!isPass||passCompleted)&&rnd()<.8){
-      const tk=ws(SH[def].def.map(x=>[x[0],x[0].a.tak
-        *(hasSyn(x[0],"rangy")?1.20:1)*(hasSyn(x[0],"thumper")?1.14:1)]));
+      let tk=null;
+      if(isPass&&passCompleted){
+        if(coverDef&&rnd()<0.62) tk=coverDef;
+        else tk=ws(SH[def].def.map(x=>[x[0],
+          x[0].a.tak*(x[1]==="LB"||x[1]==="S"?1.3:x[1]==="CB"?1.1:0.25)
+          *(hasSyn(x[0],"rangy")?1.20:1)*(hasSyn(x[0],"thumper")?1.14:1)]));
+      } else {
+        tk=ws(SH[def].def.map(x=>[x[0],
+          x[0].a.tak*(x[1]==="DT"||x[1]==="LB"?1.35:x[1]==="EDGE"?0.9:0.35)
+          *(hasSyn(x[0],"rangy")?1.20:1)*(hasSyn(x[0],"thumper")?1.14:1)]));
+      }
       if(tk){st(tk,"tkl",1);track(tk);}
     }
     // injuries
@@ -3926,7 +3997,17 @@ const HERRINGS=[
   "Heard from a source at the school that other clubs have him circled.",
   "Hands are a problem. Counted four drops in the games I watched.",
   "Highest football IQ in the class at the position, full stop.",
-  "The frame won't hold more weight. He's maxed out physically."
+  "The frame won't hold more weight. He's maxed out physically.",
+  "Some staffs are cooling on him. I still like the tape.",
+  "Not sure the tape backs up the buzz. I'd temper expectations.",
+  "Older for the class — what you see now is close to what you get.",
+  "Character flags from campus. Nothing proven, but teams are asking around.",
+  "Plays faster than he tests. Whatever the watch says, don't overthink it.",
+  "Needs a specific scheme to work. Wrong staff, and this doesn't translate.",
+  "Quietly QB1 of the room before he ever took a snap. Kids gravitate to him.",
+  "Tape's fine, but I keep hearing about attitude in the building.",
+  "Every year there's one riser nobody saw coming in February. Feels like him.",
+  "Good player, wrong era — this league's moved past what he does best."
 ];
 
 /* ---------- the consensus board ----------
@@ -4920,13 +5001,83 @@ const SCREENS_TEAM=function(){
               :"<div class='pb muted small'>Nobody here.</div>"}
         ${addSelectFor(pos,d)}</div>`;
     };
+    // Inside vs. outside linebacker: the room is ranked once by generic
+    // fit-adjusted overall and then labeled by list position, which is how a
+    // merely-good all-around linebacker outranks the room's real run-stuffer
+    // into the "Middle linebacker" slot. This grades each labeled job on
+    // what it actually needs instead — see LB_ROLE_WEIGHTS above.
+    const lbSlots=assignLBRoles(t);
+    const lbSection=(()=>{
+      const rows=lbSlots.map(({label,role,p},i)=>{
+        if(!p) return `<tr><td colspan="4" class="dim small">${label} — nobody fits</td></tr>`;
+        const grade=role?Math.round(roleGrade(p,role,'ovr',LB_ROLE_WEIGHTS)):ovrAt(p,"LB");
+        return `<tr class="${i===0?"starter":""}">
+          <td class="dim small" style="width:120px">${label}</td>
+          <td class="click" data-act="player" data-arg="${p.id}">
+            <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
+              :p.holdout?' <span class="tag warn">held out</span>':""}
+            ${p.pos!=="LB"?` <span class="tag">${p.pos}</span>`:""}
+            <div class="tiny dim">${esc(p.f)} · ${p.age} · ${p.pos!=="LB"
+              ? "out of position" : fitWord(schemeFit(p))}</div></td>
+          <td class="n ovrcell ${p.pos!=="LB"?"warn":""}">${grade}</td>
+          <td style="width:44px" class="row" style="gap:2px">${
+            own?`<button class="mini" data-act="dropdepth" data-arg="LB" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
+        </tr>`;
+      }).join("");
+      const d=(t.depth.LB||[]).map(id=>S.players[id]).filter(Boolean);
+      return `<div class="depthgrp"><div class="row spread depthhead">
+        <span>${posTag("LB")} <b class="small">Linebacker</b> <span class="tiny dim">by role, not raw rank</span></span>
+        <span class="tiny dim">${d.length} deep</span></div>
+        ${d.length?`<table class="depthtable"><tbody>${rows}</tbody></table>`
+              :"<div class='pb muted small'>Nobody here.</div>"}
+        ${addSelectFor("LB",d)}</div>`;
+    })();
+    // Early-down vs. third-down back: same distinction for the backfield,
+    // off plain attributes (RB_ROLE_WEIGHTS above) — never the hidden
+    // "Third-down back" scouting trait, which stays fogged either way.
+    const rbRoles=assignRBRoles(t);
+    const rbSection=(()=>{
+      const rbRow=(label,role,p)=>{
+        if(!p) return `<tr><td colspan="4" class="dim small">${label} — nobody fits</td></tr>`;
+        const grade=Math.round(roleGrade(p,role,'ovr',RB_ROLE_WEIGHTS));
+        return `<tr class="${role==="EARLY"?"starter":""}">
+          <td class="dim small" style="width:120px">${label}</td>
+          <td class="click" data-act="player" data-arg="${p.id}">
+            <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
+              :p.holdout?' <span class="tag warn">held out</span>':""}
+            <div class="tiny dim">${esc(p.f)} · ${p.age} · ${fitWord(schemeFit(p))}</div></td>
+          <td class="n ovrcell">${grade}</td>
+          <td style="width:44px" class="row" style="gap:2px">${
+            own?`<button class="mini" data-act="dropdepth" data-arg="RB" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
+        </tr>`;
+      };
+      const restRows=rbRoles.rest.map(p=>`<tr>
+          <td class="dim small" style="width:120px">Running back depth</td>
+          <td class="click" data-act="player" data-arg="${p.id}">
+            <b>${esc(p.l)}</b>${p.injury>0?' <span class="tag red">out</span>'
+              :p.holdout?' <span class="tag warn">held out</span>':""}
+            <div class="tiny dim">${esc(p.f)} · ${p.age}</div></td>
+          <td class="n ovrcell">${ovrAt(p,"RB")}</td>
+          <td style="width:44px" class="row" style="gap:2px">${
+            own?`<button class="mini" data-act="dropdepth" data-arg="RB" data-arg2="${p.id}" title="Remove from this spot only">✕</button>`:""}</td>
+        </tr>`).join("");
+      const d=(t.depth.RB||[]).map(id=>S.players[id]).filter(Boolean);
+      return `<div class="depthgrp"><div class="row spread depthhead">
+        <span>${posTag("RB")} <b class="small">Running back</b> <span class="tiny dim">by role, not raw rank</span></span>
+        <span class="tiny dim">${d.length} deep</span></div>
+        ${d.length?`<table class="depthtable"><tbody>${rbRow("Early-down back","EARLY",rbRoles.early)}${rbRow("Third-down back","THIRD",rbRoles.third)}${restRows}</tbody></table>`
+              :"<div class='pb muted small'>Nobody here.</div>"}
+        ${addSelectFor("RB",d)}</div>`;
+    })();
     body=`<div class="pb small muted">${own
       ? "Tap a name to move him up the chart. The order here is the order they play in. A man can hold a spot at more than one position — a tight end who's also your fourth receiver doesn't have to give one up, since they were never on the field at the same time anyway."
       : "Their order of preference at each spot."}</div>`
       +(own?`<div class="pb"><button class="btn" data-act="stafftask" data-arg="depth">Let the coaches set it</button></div>`:"")
       +dbSection
-      +["EDGE","DT","LB"].map(frontGroup).join("")
-      +POS.filter(pos=>pos!=="CB"&&pos!=="S"&&pos!=="EDGE"&&pos!=="DT"&&pos!=="LB").map(pos=>{
+      +["EDGE","DT"].map(frontGroup).join("")
+      +lbSection
+      +rbSection
+      +POS.filter(pos=>pos!=="CB"&&pos!=="S"&&pos!=="EDGE"&&pos!=="DT"&&pos!=="LB"&&pos!=="RB").map(pos=>{
       const d=(t.depth[pos]||[]).map(id=>S.players[id]).filter(Boolean);
       return `<div class="depthgrp"><div class="row spread depthhead">
         <span>${posTag(pos)} <b class="small">${POSNAME[pos]||pos}</b></span>
@@ -7754,14 +7905,18 @@ const TEAM_SCHEMES={
   OC:{
     airraid:  {name:"Air raid",       key:{QB:["tha","thp"],WR:["spd","rte"],TE:["rte"],RB:["cth"]}, run:-0.10},
     westcoast:{name:"West coast",     key:{QB:["tha","awr"],WR:["cth","rte"],TE:["cth"],RB:["cth","elu"]}, run:-0.02},
-    power:    {name:"Power run",      key:{RB:["pwr","brk"],LT:["rblk"],LG:["rblk"],C:["rblk"],RG:["rblk"],RT:["rblk"],TE:["rblk"]}, run:0.12},
-    spread:   {name:"Spread option",  key:{QB:["spd","tha"],RB:["spd","elu"],WR:["spd"]}, run:0.05}
+    power:    {name:"Power run",      key:{RB:["trk","elu"],LT:["rbk"],LG:["rbk"],C:["rbk"],RG:["rbk"],RT:["rbk"],TE:["rbk"]}, run:0.12},
+    spread:   {name:"Spread option",  key:{QB:["spd","tha"],RB:["spd","elu"],WR:["spd"]}, run:0.05},
+    zonerun:  {name:"Outside zone",   key:{RB:["agi","spd"],LT:["agi"],LG:["agi"],C:["agi"],RG:["agi"],RT:["agi"],TE:["agi"]}, run:0.10},
+    vertical: {name:"Vertical shot",  key:{QB:["thp","tha"],WR:["spd","jmp"],TE:["spd"]}, run:-0.08}
   },
   DC:{
     attack43: {name:"Attacking 4-3",  key:{EDGE:["prs","spd"],DT:["prs"],LB:["spd","tak"]}},
-    base34:   {name:"Two-gap 3-4",    key:{DT:["pwr","tak"],EDGE:["pwr","prs"],LB:["awr","tak"]}},
+    base34:   {name:"Two-gap 3-4",    key:{DT:["str","tak"],EDGE:["str","prs"],LB:["awr","tak"]}},
     cover2:   {name:"Cover two zone", key:{CB:["awr","cov"],S:["awr","cov"],LB:["cov"]}},
-    manpress: {name:"Man press",      key:{CB:["cov","spd"],S:["cov"],EDGE:["prs"]}}
+    manpress: {name:"Man press",      key:{CB:["cov","spd"],S:["cov"],EDGE:["prs"]}},
+    cover3:   {name:"Cover three",    key:{S:["cov","spd"],CB:["cov","awr"],LB:["cov","tak"]}},
+    firezone: {name:"Fire zone blitz",key:{LB:["prs","spd"],CB:["cov","spd"],EDGE:["prs","spd"]}}
   }
 };
 function schemeOf(t,side){
@@ -7786,17 +7941,64 @@ function frontLabelsFor(t){
   const sc=schemeOf(t,"DC");
   return FRONT_LABELS[sc]||FRONT_LABELS.attack43;
 }
-function schemeFit(p){
+/* Which functional role a front's own label is actually asking for. A 3-4's
+   two "Inside linebacker" slots are both the run-stuffing job (the true
+   outside-backer job already belongs to the EDGE group in that front, via
+   FRONT_LABELS.base34.EDGE above — a real 3-4 OLB and a 4-3 DE are close
+   enough kin, positionally, that this is the correct overlap, not a bug:
+   see POS_KIN's EDGE/LB entries). A 4-3's Mike is the run-stuffing job;
+   its two Will/Sam slots are the space-and-rush job. */
+function lbSlotRole(label){ return /middle|inside/i.test(label) ? "ILB" : "OLB"; }
+/* Grade and hand out this team's own LB-room slots by what each labeled job
+   actually needs, rather than by a single fit-adjusted-overall rank order —
+   the room can still include a converted EDGE or safety (autoDepth already
+   let a good-enough athlete play here out of position); this only decides
+   which of the room's own men gets which labeled slot. */
+function assignLBRoles(t){
+  const labels=(frontLabelsFor(t).LB)||["Linebacker","Linebacker","Linebacker"];
+  const pool=(t.depth&&t.depth.LB||[]).map(id=>S.players[id]).filter(Boolean);
+  const used=new Set();
+  const slots=labels.map(lbl=>{
+    const role=lbSlotRole(lbl);
+    const cand=pool.filter(p=>!used.has(p.id))
+      .sort((a,b)=>roleGrade(b,role,'ovr',LB_ROLE_WEIGHTS)-roleGrade(a,role,'ovr',LB_ROLE_WEIGHTS));
+    const p=cand[0]||null; if(p) used.add(p.id);
+    return {label:lbl, role, p};
+  });
+  const leftover=pool.filter(p=>!used.has(p.id)).map(p=>({label:"Linebacker depth",role:null,p}));
+  return slots.concat(leftover);
+}
+/* Same distinction for the backfield — an every-down/early-down runner and a
+   receiving/protection specialist off plain attributes (never the hidden
+   "Third-down back" scouting trait, which stays fogged until discovered). */
+function assignRBRoles(t){
+  const pool=(t.depth&&t.depth.RB||[]).map(id=>S.players[id]).filter(Boolean);
+  if(!pool.length) return {early:null, third:null, rest:[]};
+  const used=new Set();
+  const early=pool.slice().sort((a,b)=>roleGrade(b,"EARLY",'ovr',RB_ROLE_WEIGHTS)-roleGrade(a,"EARLY",'ovr',RB_ROLE_WEIGHTS))[0];
+  if(early) used.add(early.id);
+  const thirdCand=pool.filter(p=>!used.has(p.id));
+  const third=(thirdCand.length?thirdCand:pool).slice()
+    .sort((a,b)=>roleGrade(b,"THIRD",'ovr',RB_ROLE_WEIGHTS)-roleGrade(a,"THIRD",'ovr',RB_ROLE_WEIGHTS))[0]||null;
+  if(third) used.add(third.id);
+  const rest=pool.filter(p=>!used.has(p.id));
+  return {early, third, rest};
+}
+function schemeFit(p,atPos){
+  // atPos lets a coach ask "how would his game play in THIS scheme's version
+  // of a different spot" — used when weighing an out-of-position assignment,
+  // not just a man's fit at the job he actually holds (the default).
+  const pos = atPos||p.pos;
   const t=p.teamId!==null&&p.teamId!==undefined?S.teams[p.teamId]:null;
   if(!t) return 50;
-  const side = POSGROUP[p.pos]==="o" ? "OC" : POSGROUP[p.pos]==="d" ? "DC" : null;
+  const side = POSGROUP[pos]==="o" ? "OC" : POSGROUP[pos]==="d" ? "DC" : null;
   if(!side) return 50;
   const sc=TEAM_SCHEMES[side][schemeOf(t,side)];
-  if(!sc||!sc.key[p.pos]) return 50;
-  const attrs=sc.key[p.pos];
+  if(!sc||!sc.key[pos]) return 50;
+  const attrs=sc.key[pos];
   const keyMean=avg(attrs.map(a=>p.a[a]||55));
   // measured against what a man at his position and level normally brings
-  const n=posAttrNorm(p.pos,attrs);
+  const n=posAttrNorm(pos,attrs);
   // given how good he is, are the scheme's attributes ahead of the rest of his game?
   const expected=n.attr+(p.ovr-n.ovr);
   return clamp(50+(keyMean-expected)*4.6,8,95);
