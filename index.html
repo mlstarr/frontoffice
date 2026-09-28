@@ -313,7 +313,7 @@ nav button[aria-current="page"]{color:#F2F1E7;box-shadow:inset 0 3px 0 var(--tea
 
 // Bump this every time a new index.html is produced, so the build showing
 // on the front page always identifies which one is actually running.
-const APP_VERSION = "0.36";
+const APP_VERSION = "0.37";
 
 /* ---------- deterministic RNG ---------- */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);
@@ -5594,9 +5594,12 @@ const SCREENS_SCOUT=function(){
     return `<div class="panel"><div class="pb">
       <h2>No class on the board</h2>
       <p class="muted">Next year's class is posted when the season kicks off.</p></div>
-      <div class="pb tight"><div class="row spread click" data-act="toggleautoscout" style="cursor:pointer">
+      <div class="pb tight"><div class="row spread">
         <span class="small">Auto-scout unspent hours<br><span class="tiny dim">Any hours still banked at week's end go to whoever your scouts read as filling a need on another roster, once trades are open. Same scouts, same odds, same fog as doing it yourself.</span></span>
-        <input type="checkbox" ${t.autoScout?"checked":""} style="pointer-events:none"></div></div></div>`
+        <div class="row" style="align-items:center;gap:8px;flex-shrink:0">
+          <span class="tag ${t.autoScout?"green":"dim"}">${t.autoScout?"On":"Off"}</span>
+          <button class="btn sm" data-act="toggleautoscout">${t.autoScout?"Turn off":"Turn on"}</button>
+        </div></div></div></div>`
       + collegeMapPanel();
   let list=S.prospects.map(id=>S.players[id]);
   if(V.scoutPos!=="ALL") list=list.filter(p=>p.pos===V.scoutPos||
@@ -5643,9 +5646,12 @@ const SCREENS_SCOUT=function(){
     <div class="ph"><h2>Scouting</h2><span class="sub">${Math.round(t.scoutPts)} hours banked · +${scoutBudget(t)}/week</span></div>
     <div class="pb small muted">Worth targeting: ${draftTargets(t,4).join(", ")} — current holes and starters on expiring deals.</div>
     ${S.phase==="draft"?`<div class="pb tight"><p class="small muted">The board's closed for this class — the draft is already underway. Whatever your scouts filed is what you're picking with.</p></div>`:`
-    <div class="pb tight"><div class="row spread click" data-act="toggleautoscout" style="cursor:pointer">
+    <div class="pb tight"><div class="row spread">
         <span class="small">Auto-scout unspent hours<br><span class="tiny dim">Any hours still banked at week's end go to tape on the board's top names — or, once the board's covered and trades are open, to whoever your scouts read as filling a need elsewhere. Same scouts, same odds, same fog as doing it yourself.</span></span>
-        <input type="checkbox" ${t.autoScout?"checked":""} style="pointer-events:none"></div></div>
+        <div class="row" style="align-items:center;gap:8px;flex-shrink:0">
+          <span class="tag ${t.autoScout?"green":"dim"}">${t.autoScout?"On":"Off"}</span>
+          <button class="btn sm" data-act="toggleautoscout">${t.autoScout?"Turn off":"Turn on"}</button>
+        </div></div></div>
     <div class="pb stack">
       <div class="row wrap">
         <button class="btn sm" data-act="sweep">Area sweep <span class="dim">45h</span></button>
